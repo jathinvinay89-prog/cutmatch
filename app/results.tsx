@@ -32,6 +32,7 @@ interface Recommendation {
 interface AnalysisData {
   faceShape: string;
   faceFeatures: string;
+  hasGlasses: boolean;
   recommendations: Recommendation[];
 }
 
@@ -233,6 +234,22 @@ export default function ResultsScreen() {
               <Text style={styles.featureTitle}>Face Analysis</Text>
             </View>
             <Text style={styles.featureText}>{data.faceFeatures}</Text>
+            <View style={styles.badgesRow}>
+              <View style={styles.featureBadge}>
+                <Ionicons name="shapes-outline" size={12} color={Colors.gold} />
+                <Text style={styles.featureBadgeText}>
+                  {data.faceShape
+                    ? data.faceShape.charAt(0).toUpperCase() + data.faceShape.slice(1)
+                    : "Unknown"} face
+                </Text>
+              </View>
+              {data.hasGlasses && (
+                <View style={styles.featureBadge}>
+                  <Ionicons name="glasses-outline" size={12} color={Colors.gold} />
+                  <Text style={styles.featureBadgeText}>Glasses preserved</Text>
+                </View>
+              )}
+            </View>
           </Animated.View>
         )}
 
@@ -330,6 +347,28 @@ const styles = StyleSheet.create({
     fontFamily: "DMSans_400Regular",
     color: Colors.textSecondary,
     lineHeight: 20,
+  },
+  badgesRow: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+    marginTop: 4,
+  },
+  featureBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(201,168,76,0.1)",
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: "rgba(201,168,76,0.25)",
+  },
+  featureBadgeText: {
+    fontSize: 11,
+    fontFamily: "DMSans_500Medium",
+    color: Colors.gold,
   },
   cardsContainer: {
     gap: 12,
