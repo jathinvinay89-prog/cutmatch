@@ -1,7 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
-import OpenAI, { toFile } from "openai";
-import { Buffer } from "node:buffer";
+import OpenAI from "openai";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -24,6 +23,7 @@ interface FaceAnalysis {
   hairColor: string;
   skinTone: string;
   gender: string;
+  ageRange: string;
   recommendations: HaircutRecommendation[];
 }
 
@@ -33,25 +33,26 @@ async function analyzeFaceAndGetHaircuts(imageBase64: string): Promise<FaceAnaly
     messages: [
       {
         role: "system",
-        content: `You are a professional hair stylist and barber with 20+ years of experience. 
-Analyze the face in the image carefully and recommend the 4 best haircuts.
+        content: `You are a professional hair stylist and barber with 20+ years of experience.
+Analyze the face in the image and recommend the 4 best haircuts.
 
-Return ONLY valid JSON with this exact structure (no markdown, no extra text):
+Return ONLY valid JSON (no markdown, no extra text):
 {
   "faceShape": "oval|round|square|heart|oblong|diamond",
-  "faceFeatures": "1-2 sentence description of key facial features, bone structure, proportions",
+  "faceFeatures": "1-2 sentence description of facial structure and proportions",
   "hasGlasses": true or false,
-  "hairColor": "describe natural hair color (e.g. dark brown, blonde, black, gray)",
-  "skinTone": "describe skin tone (e.g. fair, medium, olive, dark brown)",
+  "hairColor": "natural hair color (e.g. dark brown, black, blonde, auburn, gray)",
+  "skinTone": "skin tone description (e.g. fair, light, medium, olive, tan, dark brown, deep)",
   "gender": "man|woman|person",
+  "ageRange": "approximate age range (e.g. 20s, 30s, teens)",
   "recommendations": [
     {
       "rank": 1,
       "name": "Haircut Name",
-      "description": "Precise description of the cut: length, texture, styling, sides vs top",
-      "whyItFits": "Why this specifically suits this face shape and features (1-2 sentences)",
+      "description": "Clear 1-sentence description of the cut",
+      "whyItFits": "Why this suits this person's face (1-2 sentences)",
       "difficulty": "Easy|Medium|Hard",
-      "imagePrompt": "Ultra-detailed hairstyle description for image generation: exact lengths, fade levels, texture, part placement, styling — enough for a barber to replicate perfectly"
+      "imagePrompt": "Detailed hairstyle description for portrait generation: exact hair length, fade type and level, texture, styling, top vs sides treatment — enough detail for a professional image generator"
     }
   ]
 }`,
@@ -61,13 +62,11 @@ Return ONLY valid JSON with this exact structure (no markdown, no extra text):
         content: [
           {
             type: "image_url",
-            image_url: {
-              url: `data:image/jpeg;base64,${imageBase64}`,
-            },
+            image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
           },
           {
             type: "text",
-            text: "Analyze my face thoroughly — face shape, features, glasses if present, skin tone, and hair color — then give me the 4 best haircuts with detailed image generation prompts.",
+            text: "Analyze this face thoroughly and give me the 4 best haircut recommendations with detailed image generation prompts.",
           },
         ],
       },
@@ -82,39 +81,27 @@ Return ONLY valid JSON with this exact structure (no markdown, no extra text):
 }
 
 async function generateHaircutImage(
-  imageBase64: string,
   analysis: FaceAnalysis,
   rec: HaircutRecommendation
 ): Promise<string | null> {
   try {
-    const imgBuffer = Buffer.from(imageBase64, "base64");
-    const imgFile = await toFile(imgBuffer, "face.png", { type: "image/png" });
+    const glassesDetail = analysis.hasGlasses
+      ? "wearing stylish glasses, "
+      : "";
 
-    const glassesNote = analysis.hasGlasses
-      ? "The person wears glasses — keep the glasses exactly as they are, same frames, same style."
-      : "The person does not wear glasses.";
+    const prompt = `Professional portrait photograph of a ${analysis.ageRange} ${analysis.gender} with ${analysis.skinTone} skin tone, ${glassesDetail}with the following hairstyle:
 
-    const prompt = `This is a photorealistic portrait of a ${analysis.gender} with ${analysis.skinTone} skin and ${analysis.hairColor} hair.
+${rec.name}: ${rec.imagePrompt}
 
-TASK: Apply ONLY the following hairstyle change. Do not change ANYTHING else about the person.
+Style details: ${rec.description}
 
-NEW HAIRSTYLE — ${rec.name}:
-${rec.imagePrompt}
+Photo style: Clean studio portrait, soft natural lighting, neutral background, photorealistic, high quality, sharp focus on the hair and face. The hairstyle should be clearly visible and styled well. Cinematic, modern look.`;
 
-STRICT RULES:
-- Keep the person's face IDENTICAL: same facial structure, same eyes, nose, mouth, eyebrows, skin tone, complexion, any facial hair
-- ${glassesNote}
-- Keep the background and clothing the same
-- Only the hair on top of the head changes — style, length, texture, and cut
-- The result must look like a natural, professional portrait photo — photorealistic, high quality
-- Match the person's natural ${analysis.hairColor} hair color unless the haircut description requires a different color
-- Do NOT add any text, watermarks, or overlays`;
-
-    const response = await openai.images.edit({
+    const response = await openai.images.generate({
       model: "gpt-image-1",
-      image: imgFile,
       prompt,
       size: "1024x1024",
+      quality: "medium",
     });
 
     return response.data[0]?.b64_json ?? null;
@@ -137,10 +124,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log("Analyzing face...");
       const analysis = await analyzeFaceAndGetHaircuts(imageBase64);
-      console.log(`Face shape: ${analysis.faceShape}, glasses: ${analysis.hasGlasses}, generating images...`);
+      console.log(
+        `Face: ${analysis.faceShape}, ${analysis.gender}, glasses: ${analysis.hasGlasses} — generating haircut images...`
+      );
 
       const imagePromises = analysis.recommendations.map((rec) =>
-        generateHaircutImage(imageBase64, analysis, rec)
+        generateHaircutImage(analysis, rec)
       );
 
       const generatedImages = await Promise.all(imagePromises);
@@ -156,7 +145,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : null,
       }));
 
-      console.log("Analysis and generation complete.");
+      const successCount = generatedImages.filter(Boolean).length;
+      console.log(`Done. ${successCount}/4 images generated successfully.`);
 
       res.json({
         faceShape: analysis.faceShape,

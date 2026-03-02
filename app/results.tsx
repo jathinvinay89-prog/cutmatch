@@ -62,7 +62,7 @@ function RankBadge({ rank }: { rank: number }) {
   );
 }
 
-function HaircutCard({ rec, photo, index }: { rec: Recommendation; photo: string; index: number }) {
+function HaircutCard({ rec, index }: { rec: Recommendation; index: number }) {
   const slideAnim = useRef(new Animated.Value(60)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const [imageError, setImageError] = useState(false);
@@ -92,7 +92,7 @@ function HaircutCard({ rec, photo, index }: { rec: Recommendation; photo: string
       ? "#FF9800"
       : "#F44336";
 
-  const displayImage = rec.generatedImage && !imageError ? rec.generatedImage : photo;
+  const hasGeneratedImage = rec.generatedImage && !imageError;
 
   return (
     <Animated.View
@@ -115,16 +115,22 @@ function HaircutCard({ rec, photo, index }: { rec: Recommendation; photo: string
 
       <View style={styles.cardImageRow}>
         <View style={styles.cardImageContainer}>
-          <Image
-            source={{ uri: displayImage }}
-            style={styles.cardImage}
-            contentFit="cover"
-            onError={() => setImageError(true)}
-          />
-          {rec.generatedImage && !imageError && (
-            <View style={styles.aiTag}>
-              <Ionicons name="sparkles" size={10} color={Colors.gold} />
-              <Text style={styles.aiTagText}>AI</Text>
+          {hasGeneratedImage ? (
+            <>
+              <Image
+                source={{ uri: rec.generatedImage! }}
+                style={styles.cardImage}
+                contentFit="cover"
+                onError={() => setImageError(true)}
+              />
+              <View style={styles.aiTag}>
+                <Ionicons name="sparkles" size={10} color={Colors.gold} />
+                <Text style={styles.aiTagText}>AI</Text>
+              </View>
+            </>
+          ) : (
+            <View style={styles.imagePlaceholder}>
+              <Ionicons name="cut-outline" size={28} color={Colors.border} />
             </View>
           )}
         </View>
@@ -258,7 +264,6 @@ export default function ResultsScreen() {
             <HaircutCard
               key={rec.rank}
               rec={rec}
-              photo={photo}
               index={i}
             />
           ))}
@@ -396,6 +401,13 @@ const styles = StyleSheet.create({
   cardImage: {
     width: "100%",
     height: "100%",
+  },
+  imagePlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: Colors.surface2,
+    alignItems: "center",
+    justifyContent: "center",
   },
   aiTag: {
     position: "absolute",
