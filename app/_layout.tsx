@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { queryClient } from "@/lib/query-client";
+import { AppProvider } from "@/context/AppContext";
 import {
   useFonts,
   DMSans_400Regular,
@@ -18,11 +19,9 @@ SplashScreen.preventAutoHideAsync();
 function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerShown: false, animation: "fade" }}>
-      <Stack.Screen name="index" />
-      <Stack.Screen
-        name="results"
-        options={{ animation: "slide_from_bottom" }}
-      />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="post/[id]" options={{ animation: "slide_from_right" }} />
+      <Stack.Screen name="chat/[userId]" options={{ animation: "slide_from_right" }} />
     </Stack>
   );
 }
@@ -47,7 +46,9 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <KeyboardProvider>
-            <RootLayoutNav />
+            <AppProvider>
+              <RootLayoutNav />
+            </AppProvider>
           </KeyboardProvider>
         </GestureHandlerRootView>
       </QueryClientProvider>
