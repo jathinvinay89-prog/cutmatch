@@ -18,7 +18,7 @@ import { Ionicons, Feather } from "@expo/vector-icons";
 import { Colors } from "@/constants/colors";
 import { useApp } from "@/context/AppContext";
 import { fetch } from "expo/fetch";
-const Haptics = Platform.OS !== 'web' ? require('expo-haptics') : null;
+const Haptics = Platform.OS !== "web" ? require("expo-haptics") : null;
 
 interface Recommendation {
   rank: number;
@@ -60,7 +60,6 @@ function timeAgo(dateStr: string) {
 }
 
 function AvatarCircle({ name, size = 40 }) {
-  // If the name is missing, use "U" for User
   const safeName = name || "User";
   const initials = safeName.slice(0, 2).toUpperCase();
   const hue = (safeName.charCodeAt(0) * 37) % 360;
@@ -76,7 +75,15 @@ function AvatarCircle({ name, size = 40 }) {
         justifyContent: "center",
       }}
     >
-      <Text style={{ color: "white", fontSize: size * 0.4 }}>{initials}</Text>
+      <Text
+        style={{
+          color: "white",
+          fontSize: size * 0.35,
+          fontWeight: "bold",
+        }}
+      >
+        {initials}
+      </Text>
     </View>
   );
 }
