@@ -19,12 +19,12 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { Ionicons, Feather } from "@expo/vector-icons";
-import { Colors } from "@/constants/colors";
+import { useApp } from "@/context/AppContext";
 import { getApiUrl } from "@/lib/query-client";
 import { fetch } from "expo/fetch";
-import { useApp } from "@/context/AppContext";
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get("window");
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
+const TAB_BAR_HEIGHT = Platform.OS === "ios" ? 49 : Platform.OS === "android" ? 56 : 84;
 
 interface Recommendation {
   rank: number;
@@ -46,7 +46,8 @@ type Phase = "camera" | "loading" | "results";
 
 export default function CutMatchScreen() {
   const insets = useSafeAreaInsets();
-  const { currentUser, apiBase } = useApp();
+  const { currentUser, apiBase, settings, colors } = useApp();
+  const C = colors;
   const [phase, setPhase] = useState<Phase>("camera");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedBase64, setSelectedBase64] = useState<string | null>(null);
@@ -64,6 +65,14 @@ export default function CutMatchScreen() {
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+
+  const triggerHaptic = (type: "light" | "medium" | "success" | "error") => {
+    if (!settings.enableHaptics) return;
+    if (type === "light") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    else if (type === "medium") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    else if (type === "success") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+  };
 
   const animateDots = useCallback(() => {
     loadingDotAnim.forEach((dot, i) => {
@@ -85,11 +94,11 @@ export default function CutMatchScreen() {
       friction: 14,
       useNativeDriver: true,
     }).start();
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    triggerHaptic("success");
   };
 
   const pickImage = async (source: "camera" | "gallery") => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerHaptic("light");
     if (source === "camera") {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== "granted") {
@@ -121,7 +130,7 @@ export default function CutMatchScreen() {
 
   const runAnalysis = async () => {
     if (!selectedImage) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    triggerHaptic("medium");
     setPhase("loading");
     setStatusText("Analyzing your face...");
     setAnalysis(null);
@@ -206,7 +215,7 @@ export default function CutMatchScreen() {
         }
       }
     } catch (err: any) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      triggerHaptic("error");
       Alert.alert("Analysis Failed", err.message || "Please try again.");
       setPhase("camera");
     }
@@ -229,13 +238,17 @@ export default function CutMatchScreen() {
     if (!currentUser || !analysis || !selectedImage) return;
     setIsSharing(true);
     try {
+      const facePhotoUrl = selectedBase64
+        ? `data:image/jpeg;base64,${selectedBase64}`
+        : selectedImage;
+
       const url = new URL("/api/posts", apiBase).toString();
       await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: currentUser.id,
-          facePhotoUrl: selectedImage,
+          facePhotoUrl,
           faceShape: analysis.faceShape,
           faceFeatures: analysis.faceFeatures,
           hasGlasses: analysis.hasGlasses,
@@ -244,7 +257,7 @@ export default function CutMatchScreen() {
           isPublic: true,
         }),
       });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      triggerHaptic("success");
       setShareModalVisible(false);
       Alert.alert("Shared!", "Your haircut recommendations are now in the Feed.");
       resetToCamera();
@@ -255,86 +268,89 @@ export default function CutMatchScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#141414", "#0A0A0A"]} style={StyleSheet.absoluteFill} />
+    <View style={[styles.container, { backgroundColor: C.background }]}>
+      <LinearGradient
+        colors={C.background === "#0A0A0A" ? ["#141414", "#0A0A0A"] : ["#F5F0E8", "#EDE8E0"]}
+        style={StyleSheet.absoluteFill}
+      />
 
-      {/* ── CAMERA PHASE ── */}
       {phase !== "results" && (
         <>
           <View style={[styles.header, { paddingTop: topPad + 12 }]}>
-            <Text style={styles.logo}>CutMatch</Text>
-            <Text style={styles.tagline}>AI HAIRCUT ADVISOR</Text>
+            <Text style={[styles.logo, { color: C.gold }]}>CutMatch</Text>
+            <Text style={[styles.tagline, { color: C.textSecondary }]}>AI HAIRCUT ADVISOR</Text>
           </View>
 
           <ScrollView
             style={styles.scroll}
-            contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPad + 100 }]}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 20 }]}
             showsVerticalScrollIndicator={false}
           >
             {selectedImage ? (
               <View style={styles.photoContainer}>
                 <Image source={{ uri: selectedImage }} style={styles.photo} contentFit="cover" />
                 <LinearGradient colors={["transparent", "rgba(10,10,10,0.9)"]} style={styles.photoGrad} />
-                <Pressable style={styles.changeBtn} onPress={() => { setSelectedImage(null); setSelectedBase64(null); }}>
-                  <Feather name="refresh-ccw" size={14} color={Colors.text} />
-                  <Text style={styles.changeBtnText}>Change</Text>
+                <Pressable style={[styles.changeBtn, { backgroundColor: "rgba(0,0,0,0.75)", borderColor: C.border }]}
+                  onPress={() => { setSelectedImage(null); setSelectedBase64(null); }}>
+                  <Feather name="refresh-ccw" size={14} color={C.text} />
+                  <Text style={[styles.changeBtnText, { color: C.text }]}>Change</Text>
                 </Pressable>
               </View>
             ) : (
-              <View style={styles.uploadBox}>
-                <View style={styles.iconRing}>
-                  <Ionicons name="person" size={36} color={Colors.gold} />
+              <View style={[styles.uploadBox, { backgroundColor: C.surface, borderColor: C.border }]}>
+                <View style={[styles.iconRing, { borderColor: C.gold, backgroundColor: C.gold + "14" }]}>
+                  <Ionicons name="person" size={36} color={C.gold} />
                 </View>
-                <Text style={styles.uploadTitle}>Upload your photo</Text>
-                <Text style={styles.uploadHint}>
+                <Text style={[styles.uploadTitle, { color: C.text }]}>Upload your photo</Text>
+                <Text style={[styles.uploadHint, { color: C.textSecondary }]}>
                   Face camera directly.{"\n"}Good lighting = better results.
                 </Text>
               </View>
             )}
 
             <View style={styles.btnRow}>
-              <Pressable style={styles.srcBtn} onPress={() => pickImage("camera")}>
-                <Ionicons name="camera" size={20} color={Colors.gold} />
-                <Text style={styles.srcBtnText}>Camera</Text>
+              <Pressable style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]} onPress={() => pickImage("camera")}>
+                <Ionicons name="camera" size={20} color={C.gold} />
+                <Text style={[styles.srcBtnText, { color: C.gold }]}>Camera</Text>
               </Pressable>
-              <Pressable style={styles.srcBtn} onPress={() => pickImage("gallery")}>
-                <Ionicons name="images" size={20} color={Colors.gold} />
-                <Text style={styles.srcBtnText}>Gallery</Text>
+              <Pressable style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]} onPress={() => pickImage("gallery")}>
+                <Ionicons name="images" size={20} color={C.gold} />
+                <Text style={[styles.srcBtnText, { color: C.gold }]}>Gallery</Text>
               </Pressable>
             </View>
 
-            <View style={styles.pills}>
+            <View style={[styles.pills, { backgroundColor: C.surface, borderColor: C.border }]}>
               {[
                 { icon: "scan-outline" as const, label: "Face Shape" },
                 { icon: "sparkles-outline" as const, label: "4 Cuts" },
                 { icon: "image-outline" as const, label: "AI Photos" },
               ].map((p) => (
                 <View key={p.label} style={styles.pill}>
-                  <Ionicons name={p.icon} size={16} color={Colors.gold} />
-                  <Text style={styles.pillText}>{p.label}</Text>
+                  <Ionicons name={p.icon} size={16} color={C.gold} />
+                  <Text style={[styles.pillText, { color: C.textSecondary }]}>{p.label}</Text>
                 </View>
               ))}
             </View>
           </ScrollView>
 
-          <View style={[styles.footer, { paddingBottom: bottomPad + 16 }]}>
+          <View style={[styles.footer, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 8 }]}>
             {phase === "loading" ? (
-              <View style={styles.loadingBtn}>
+              <View style={[styles.loadingBtn, { backgroundColor: C.surface, borderColor: C.border }]}>
                 <View style={styles.dots}>
                   {loadingDotAnim.map((d, i) => (
-                    <Animated.View key={i} style={[styles.dot, { opacity: d }]} />
+                    <Animated.View key={i} style={[styles.dot, { backgroundColor: C.gold, opacity: d }]} />
                   ))}
                 </View>
-                <Text style={styles.loadingBtnText}>{statusText}</Text>
+                <Text style={[styles.loadingBtnText, { color: C.textSecondary }]}>{statusText}</Text>
               </View>
             ) : (
               <Pressable
-                style={[styles.analyzeBtn, !selectedImage && styles.analyzeBtnDisabled]}
+                style={[styles.analyzeBtn, { backgroundColor: selectedImage ? C.gold : C.surface }, !selectedImage && { borderWidth: 1, borderColor: C.border }]}
                 onPress={runAnalysis}
                 disabled={!selectedImage}
               >
-                <Ionicons name="sparkles" size={18} color={selectedImage ? Colors.background : Colors.textSecondary} />
-                <Text style={[styles.analyzeBtnText, !selectedImage && styles.analyzeBtnTextDim]}>
+                <Ionicons name="sparkles" size={18} color={selectedImage ? C.background : C.textSecondary} />
+                <Text style={[styles.analyzeBtnText, { color: selectedImage ? C.background : C.textSecondary }]}>
                   Find My Best Cuts
                 </Text>
               </Pressable>
@@ -343,18 +359,20 @@ export default function CutMatchScreen() {
         </>
       )}
 
-      {/* ── RESULTS OVERLAY ── */}
-      <Animated.View style={[styles.resultsPanel, { transform: [{ translateY: resultsAnim }] }]}>
-        <LinearGradient colors={["#0A0A0A", "#141414"]} style={StyleSheet.absoluteFill} />
+      <Animated.View style={[styles.resultsPanel, { backgroundColor: C.background, transform: [{ translateY: resultsAnim }] }]}>
+        <LinearGradient
+          colors={C.background === "#0A0A0A" ? ["#0A0A0A", "#141414"] : ["#F5F0E8", "#EDE8E0"]}
+          style={StyleSheet.absoluteFill}
+        />
 
         <View style={[styles.resultsHeader, { paddingTop: topPad + 12 }]}>
-          <Pressable style={styles.backBtn} onPress={resetToCamera}>
-            <Ionicons name="chevron-back" size={22} color={Colors.text} />
+          <Pressable style={[styles.backBtn, { backgroundColor: C.surface, borderColor: C.border }]} onPress={resetToCamera}>
+            <Ionicons name="chevron-back" size={22} color={C.text} />
           </Pressable>
           <View>
-            <Text style={styles.resultsTitle}>Your Best Cuts</Text>
-            {analysis?.faceShape && (
-              <Text style={styles.resultsSubtitle}>
+            <Text style={[styles.resultsTitle, { color: C.text }]}>Your Best Cuts</Text>
+            {settings.showFaceShape && analysis?.faceShape && (
+              <Text style={[styles.resultsSubtitle, { color: C.textSecondary }]}>
                 {analysis.faceShape.charAt(0).toUpperCase() + analysis.faceShape.slice(1)} face shape
               </Text>
             )}
@@ -364,75 +382,76 @@ export default function CutMatchScreen() {
 
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.resultsScroll, { paddingBottom: bottomPad + 120 }]}
+          contentContainerStyle={[styles.resultsScroll, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 100 }]}
         >
           {analysis?.faceFeatures ? (
-            <View style={styles.featureCard}>
+            <View style={[styles.featureCard, { backgroundColor: C.surface, borderColor: C.border }]}>
               <View style={styles.featureRow}>
-                <Ionicons name="scan" size={14} color={Colors.gold} />
-                <Text style={styles.featureLabel}>FACE ANALYSIS</Text>
+                <Ionicons name="scan" size={14} color={C.gold} />
+                <Text style={[styles.featureLabel, { color: C.textSecondary }]}>FACE ANALYSIS</Text>
               </View>
-              <Text style={styles.featureText}>{analysis.faceFeatures}</Text>
+              <Text style={[styles.featureText, { color: C.text }]}>{analysis.faceFeatures}</Text>
               <View style={styles.badgeRow}>
-                <View style={styles.badge}>
-                  <Ionicons name="shapes-outline" size={11} color={Colors.gold} />
-                  <Text style={styles.badgeText}>
-                    {analysis.faceShape?.charAt(0).toUpperCase() + analysis.faceShape?.slice(1)} face
-                  </Text>
-                </View>
+                {settings.showFaceShape && (
+                  <View style={[styles.badge, { backgroundColor: C.gold + "20", borderColor: C.gold + "40" }]}>
+                    <Ionicons name="shapes-outline" size={11} color={C.gold} />
+                    <Text style={[styles.badgeText, { color: C.gold }]}>
+                      {analysis.faceShape?.charAt(0).toUpperCase() + analysis.faceShape?.slice(1)} face
+                    </Text>
+                  </View>
+                )}
                 {analysis.hasGlasses && (
-                  <View style={styles.badge}>
-                    <Ionicons name="glasses-outline" size={11} color={Colors.gold} />
-                    <Text style={styles.badgeText}>With glasses</Text>
+                  <View style={[styles.badge, { backgroundColor: C.gold + "20", borderColor: C.gold + "40" }]}>
+                    <Ionicons name="glasses-outline" size={11} color={C.gold} />
+                    <Text style={[styles.badgeText, { color: C.gold }]}>With glasses</Text>
                   </View>
                 )}
               </View>
             </View>
           ) : (
-            <View style={styles.featureCardLoading}>
-              <Text style={styles.featureLoadingText}>Analyzing your face...</Text>
+            <View style={[styles.featureCardLoading, { backgroundColor: C.surface, borderColor: C.border }]}>
+              <Text style={[styles.featureLoadingText, { color: C.textSecondary }]}>Analyzing your face...</Text>
             </View>
           )}
 
           {(analysis?.recommendations ?? [{}, {}, {}, {}]).map((rec: any, i: number) => (
-            <ResultCard key={i} rec={rec} index={i} />
+            <ResultCard key={i} rec={rec} index={i} colors={C} showDifficulty={settings.showDifficulty} />
           ))}
         </ScrollView>
 
         {analysis && (
-          <View style={[styles.shareBar, { paddingBottom: bottomPad + 16 }]}>
-            <Pressable style={styles.keepBtn} onPress={resetToCamera}>
-              <Ionicons name="lock-closed-outline" size={16} color={Colors.textSecondary} />
-              <Text style={styles.keepBtnText}>Keep Private</Text>
+          <View style={[styles.shareBar, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 8, backgroundColor: C.background + "F0", borderTopColor: C.border }]}>
+            <Pressable style={[styles.keepBtn, { borderColor: C.border }]} onPress={resetToCamera}>
+              <Ionicons name="lock-closed-outline" size={16} color={C.textSecondary} />
+              <Text style={[styles.keepBtnText, { color: C.textSecondary }]}>Keep Private</Text>
             </Pressable>
-            <Pressable style={styles.shareBtn} onPress={() => setShareModalVisible(true)}>
-              <Ionicons name="share-outline" size={16} color={Colors.background} />
-              <Text style={styles.shareBtnText}>Share to Feed</Text>
+            <Pressable style={[styles.shareBtn, { backgroundColor: C.gold }]} onPress={() => setShareModalVisible(true)}>
+              <Ionicons name="share-outline" size={16} color={C.background} />
+              <Text style={[styles.shareBtnText, { color: C.background }]}>Share to Feed</Text>
             </Pressable>
           </View>
         )}
       </Animated.View>
 
-      {/* ── SHARE MODAL ── */}
       <Modal visible={shareModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShareModalVisible(false)} />
-          <View style={[styles.modalCard, { paddingBottom: bottomPad + 20 }]}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Share to Feed</Text>
-            <Text style={styles.modalSubtitle}>Add a caption (optional)</Text>
+          <View style={[styles.modalCard, { backgroundColor: C.surface, borderColor: C.border, paddingBottom: bottomPad + 20 }]}>
+            <View style={[styles.modalHandle, { backgroundColor: C.border }]} />
+            <Text style={[styles.modalTitle, { color: C.text }]}>Share to Feed</Text>
+            <Text style={[styles.modalSubtitle, { color: C.textSecondary }]}>Add a caption (optional)</Text>
             <TextInput
-              style={styles.captionInput}
+              style={[styles.captionInput, { backgroundColor: C.surface2, borderColor: C.border, color: C.text }]}
               placeholder="What do you think? #haircut #cutmatch"
-              placeholderTextColor={Colors.textSecondary}
+              placeholderTextColor={C.textSecondary}
               value={caption}
               onChangeText={setCaption}
               multiline
               maxLength={200}
             />
-            <Pressable style={[styles.modalShareBtn, isSharing && { opacity: 0.7 }]} onPress={sharePost} disabled={isSharing}>
-              <Ionicons name="share-outline" size={18} color={Colors.background} />
-              <Text style={styles.modalShareText}>{isSharing ? "Sharing..." : "Share Now"}</Text>
+            <Pressable style={[styles.modalShareBtn, { backgroundColor: C.gold }, isSharing && { opacity: 0.7 }]} onPress={sharePost} disabled={isSharing}>
+              <Ionicons name="share-outline" size={18} color={C.background} />
+              <Text style={[styles.modalShareText, { color: C.background }]}>{isSharing ? "Sharing..." : "Share Now"}</Text>
             </Pressable>
           </View>
         </KeyboardAvoidingView>
@@ -441,7 +460,7 @@ export default function CutMatchScreen() {
   );
 }
 
-function ResultCard({ rec, index }: { rec: any; index: number }) {
+function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index: number; colors: any; showDifficulty: boolean }) {
   const slideAnim = useRef(new Animated.Value(40)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
@@ -452,41 +471,41 @@ function ResultCard({ rec, index }: { rec: any; index: number }) {
     ]).start();
   }, []);
 
-  const rankColors: Record<number, string> = { 1: Colors.rank1, 2: Colors.rank2, 3: Colors.rank3, 4: Colors.rank4 };
-  const color = rankColors[rec.rank] ?? Colors.textSecondary;
+  const rankColors: Record<number, string> = { 1: C.rank1, 2: C.rank2, 3: C.rank3, 4: C.rank4 };
+  const color = rankColors[rec.rank] ?? C.textSecondary;
   const diffColor = rec.difficulty === "Easy" ? "#4CAF50" : rec.difficulty === "Medium" ? "#FF9800" : "#F44336";
 
   if (!rec.rank) {
     return (
-      <Animated.View style={[styles.cardSkeleton, { opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
-        <View style={styles.skeletonImg} />
+      <Animated.View style={[styles.cardSkeleton, { backgroundColor: C.surface, borderColor: C.border, opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
+        <View style={[styles.skeletonImg, { backgroundColor: C.surface2 }]} />
         <View style={styles.skeletonLines}>
-          <View style={[styles.skeletonLine, { width: "60%" }]} />
-          <View style={[styles.skeletonLine, { width: "90%" }]} />
-          <View style={[styles.skeletonLine, { width: "75%" }]} />
+          <View style={[styles.skeletonLine, { backgroundColor: C.surface2, width: "60%" }]} />
+          <View style={[styles.skeletonLine, { backgroundColor: C.surface2, width: "90%" }]} />
+          <View style={[styles.skeletonLine, { backgroundColor: C.surface2, width: "75%" }]} />
         </View>
       </Animated.View>
     );
   }
 
   return (
-    <Animated.View style={[styles.card, { opacity: opacityAnim, transform: [{ translateY: slideAnim }] }, rec.rank === 1 && styles.card1]}>
+    <Animated.View style={[styles.card, { backgroundColor: C.surface, borderColor: rec.rank === 1 ? C.gold + "40" : C.border }, { opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
       {rec.rank === 1 && (
-        <LinearGradient colors={["rgba(201,168,76,0.12)", "transparent"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+        <LinearGradient colors={[C.gold + "20", "transparent"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
       )}
       <View style={styles.cardRow}>
         <View style={styles.cardImgBox}>
           {rec.generatedImage ? (
             <Image source={{ uri: rec.generatedImage }} style={styles.cardImg} contentFit="cover" />
           ) : (
-            <View style={styles.cardImgPlaceholder}>
-              <Ionicons name="cut-outline" size={24} color={Colors.border} />
+            <View style={[styles.cardImgPlaceholder, { backgroundColor: C.surface2 }]}>
+              <Ionicons name="cut-outline" size={24} color={C.border} />
             </View>
           )}
           {rec.generatedImage && (
             <View style={styles.aiTag}>
-              <Ionicons name="sparkles" size={9} color={Colors.gold} />
-              <Text style={styles.aiTagText}>AI</Text>
+              <Ionicons name="sparkles" size={9} color={C.gold} />
+              <Text style={[styles.aiTagText, { color: C.gold }]}>AI</Text>
             </View>
           )}
         </View>
@@ -495,18 +514,20 @@ function ResultCard({ rec, index }: { rec: any; index: number }) {
             {rec.rank === 1 && <Ionicons name="trophy" size={11} color={color} />}
             <Text style={[styles.rankText, { color }]}>#{rec.rank} {rec.rank === 1 ? "Best" : ""}</Text>
           </View>
-          <Text style={styles.cutName}>{rec.name}</Text>
-          <Text style={styles.cutDesc} numberOfLines={2}>{rec.description}</Text>
-          <View style={styles.diffRow}>
-            <View style={[styles.diffDot, { backgroundColor: diffColor }]} />
-            <Text style={[styles.diffText, { color: diffColor }]}>{rec.difficulty}</Text>
-          </View>
+          <Text style={[styles.cutName, { color: C.text }]}>{rec.name}</Text>
+          <Text style={[styles.cutDesc, { color: C.textSecondary }]} numberOfLines={2}>{rec.description}</Text>
+          {showDifficulty && rec.difficulty && (
+            <View style={styles.diffRow}>
+              <View style={[styles.diffDot, { backgroundColor: diffColor }]} />
+              <Text style={[styles.diffText, { color: diffColor }]}>{rec.difficulty}</Text>
+            </View>
+          )}
         </View>
       </View>
       {rec.whyItFits && (
-        <View style={styles.whyBox}>
-          <Feather name="check-circle" size={12} color={Colors.gold} />
-          <Text style={styles.whyText}>{rec.whyItFits}</Text>
+        <View style={[styles.whyBox, { borderTopColor: C.border }]}>
+          <Feather name="check-circle" size={12} color={C.gold} />
+          <Text style={[styles.whyText, { color: C.textSecondary }]}>{rec.whyItFits}</Text>
         </View>
       )}
     </Animated.View>
@@ -514,10 +535,10 @@ function ResultCard({ rec, index }: { rec: any; index: number }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  container: { flex: 1 },
   header: { paddingHorizontal: 24, paddingBottom: 8 },
-  logo: { fontSize: 28, fontFamily: "DMSans_700Bold", color: Colors.gold, letterSpacing: -0.5 },
-  tagline: { fontSize: 11, fontFamily: "DMSans_400Regular", color: Colors.textSecondary, letterSpacing: 1, textTransform: "uppercase", marginTop: 2 },
+  logo: { fontSize: 28, fontFamily: "DMSans_700Bold", letterSpacing: -0.5 },
+  tagline: { fontSize: 11, fontFamily: "DMSans_400Regular", letterSpacing: 1, textTransform: "uppercase", marginTop: 2 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 16, gap: 14 },
   photoContainer: { borderRadius: 20, overflow: "hidden", height: 280, position: "relative" },
@@ -526,102 +547,128 @@ const styles = StyleSheet.create({
   changeBtn: {
     position: "absolute", bottom: 12, right: 12,
     flexDirection: "row", alignItems: "center", gap: 5,
-    backgroundColor: "rgba(0,0,0,0.75)", paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 20, borderWidth: 1, borderColor: Colors.border,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 20, borderWidth: 1,
   },
-  changeBtnText: { fontSize: 12, fontFamily: "DMSans_500Medium", color: Colors.text },
+  changeBtnText: { fontSize: 12, fontFamily: "DMSans_500Medium" },
   uploadBox: {
-    height: 240, backgroundColor: Colors.surface, borderRadius: 20,
-    borderWidth: 1, borderColor: Colors.border, borderStyle: "dashed",
+    height: 240, borderRadius: 20,
+    borderWidth: 1, borderStyle: "dashed",
     alignItems: "center", justifyContent: "center", gap: 12,
   },
   iconRing: {
-    width: 80, height: 80, borderRadius: 40, borderWidth: 1, borderColor: Colors.gold,
-    alignItems: "center", justifyContent: "center", backgroundColor: "rgba(201,168,76,0.08)",
+    width: 80, height: 80, borderRadius: 40, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
   },
-  uploadTitle: { fontSize: 17, fontFamily: "DMSans_700Bold", color: Colors.text },
-  uploadHint: { fontSize: 13, fontFamily: "DMSans_400Regular", color: Colors.textSecondary, textAlign: "center", lineHeight: 19 },
+  uploadTitle: { fontSize: 17, fontFamily: "DMSans_700Bold" },
+  uploadHint: { fontSize: 13, fontFamily: "DMSans_400Regular", textAlign: "center", lineHeight: 19 },
   btnRow: { flexDirection: "row", gap: 12 },
   srcBtn: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    paddingVertical: 13, backgroundColor: "rgba(201,168,76,0.08)",
-    borderRadius: 14, borderWidth: 1, borderColor: "rgba(201,168,76,0.25)",
+    paddingVertical: 13, borderRadius: 14, borderWidth: 1,
   },
-  srcBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium", color: Colors.gold },
-  pills: { flexDirection: "row", justifyContent: "space-around", backgroundColor: Colors.surface, borderRadius: 14, paddingVertical: 14, borderWidth: 1, borderColor: Colors.border },
+  srcBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium" },
+  pills: { flexDirection: "row", justifyContent: "space-around", borderRadius: 14, paddingVertical: 14, borderWidth: 1 },
   pill: { alignItems: "center", gap: 5 },
-  pillText: { fontSize: 11, fontFamily: "DMSans_500Medium", color: Colors.textSecondary },
+  pillText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
   footer: { paddingHorizontal: 20, paddingTop: 10 },
   analyzeBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    paddingVertical: 16, backgroundColor: Colors.gold, borderRadius: 16,
+    paddingVertical: 16, borderRadius: 16,
   },
-  analyzeBtnDisabled: { backgroundColor: Colors.surface2 },
-  analyzeBtnText: { fontSize: 16, fontFamily: "DMSans_700Bold", color: Colors.background, letterSpacing: -0.2 },
-  analyzeBtnTextDim: { color: Colors.textSecondary },
+  analyzeBtnText: { fontSize: 16, fontFamily: "DMSans_700Bold", letterSpacing: -0.2 },
   loadingBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12,
-    paddingVertical: 16, backgroundColor: Colors.surface, borderRadius: 16, borderWidth: 1, borderColor: Colors.border,
+    paddingVertical: 16, borderRadius: 16, borderWidth: 1,
   },
-  loadingBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium", color: Colors.textSecondary },
   dots: { flexDirection: "row", gap: 4 },
-  dot: { width: 5, height: 5, borderRadius: 3, backgroundColor: Colors.gold },
-
-  // Results Panel
-  resultsPanel: { ...StyleSheet.absoluteFillObject, backgroundColor: Colors.background, zIndex: 10 },
-  resultsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12 },
-  backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
-  resultsTitle: { fontSize: 18, fontFamily: "DMSans_700Bold", color: Colors.text, textAlign: "center" },
-  resultsSubtitle: { fontSize: 11, fontFamily: "DMSans_400Regular", color: Colors.gold, textAlign: "center", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 },
-  resultsScroll: { paddingHorizontal: 16, paddingTop: 4, gap: 10 },
-
-  featureCard: { backgroundColor: Colors.surface, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 6 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  loadingBtnText: { fontSize: 15, fontFamily: "DMSans_500Medium" },
+  resultsPanel: { ...StyleSheet.absoluteFillObject },
+  resultsHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingBottom: 12,
+  },
+  backBtn: {
+    width: 40, height: 40, borderRadius: 12, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
+  resultsTitle: { fontSize: 22, fontFamily: "DMSans_700Bold", letterSpacing: -0.3 },
+  resultsSubtitle: { fontSize: 13, fontFamily: "DMSans_400Regular", marginTop: 1 },
+  resultsScroll: { paddingHorizontal: 16, gap: 10, paddingTop: 4 },
+  featureCard: { padding: 14, borderRadius: 16, borderWidth: 1, gap: 8 },
   featureRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  featureLabel: { fontSize: 11, fontFamily: "DMSans_700Bold", color: Colors.gold, letterSpacing: 0.5 },
-  featureText: { fontSize: 13, fontFamily: "DMSans_400Regular", color: Colors.textSecondary, lineHeight: 19 },
-  featureCardLoading: { backgroundColor: Colors.surface, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.border, alignItems: "center", height: 60, justifyContent: "center" },
-  featureLoadingText: { fontSize: 13, fontFamily: "DMSans_400Regular", color: Colors.textSecondary },
-  badgeRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
-  badge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(201,168,76,0.1)", borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3, borderWidth: 1, borderColor: "rgba(201,168,76,0.2)" },
-  badgeText: { fontSize: 10, fontFamily: "DMSans_500Medium", color: Colors.gold },
-
-  card: { backgroundColor: Colors.surface, borderRadius: 18, borderWidth: 1, borderColor: Colors.border, overflow: "hidden", padding: 14, gap: 10 },
-  card1: { borderColor: "rgba(201,168,76,0.3)" },
-  cardSkeleton: { backgroundColor: Colors.surface, borderRadius: 18, borderWidth: 1, borderColor: Colors.border, padding: 14, flexDirection: "row", gap: 12, height: 120 },
-  skeletonImg: { width: 80, height: 100, borderRadius: 10, backgroundColor: Colors.surface2 },
-  skeletonLines: { flex: 1, gap: 8, justifyContent: "center" },
-  skeletonLine: { height: 12, borderRadius: 6, backgroundColor: Colors.surface2 },
+  featureLabel: { fontSize: 10, fontFamily: "DMSans_700Bold", letterSpacing: 1, textTransform: "uppercase" },
+  featureText: { fontSize: 13, fontFamily: "DMSans_400Regular", lineHeight: 19 },
+  badgeRow: { flexDirection: "row", gap: 8 },
+  badge: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 1,
+  },
+  badgeText: { fontSize: 10, fontFamily: "DMSans_500Medium" },
+  featureCardLoading: { padding: 14, borderRadius: 16, borderWidth: 1, alignItems: "center" },
+  featureLoadingText: { fontSize: 13, fontFamily: "DMSans_400Regular" },
+  shareBar: {
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  keepBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 14, borderRadius: 14, borderWidth: 1,
+  },
+  keepBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium" },
+  shareBtn: {
+    flex: 2, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 14, borderRadius: 14,
+  },
+  shareBtnText: { fontSize: 15, fontFamily: "DMSans_700Bold" },
+  modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  modalCard: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 14, borderWidth: 1 },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 4 },
+  modalTitle: { fontSize: 20, fontFamily: "DMSans_700Bold" },
+  modalSubtitle: { fontSize: 13, fontFamily: "DMSans_400Regular" },
+  captionInput: {
+    borderRadius: 14, padding: 14, fontSize: 14, fontFamily: "DMSans_400Regular",
+    borderWidth: 1, minHeight: 80, textAlignVertical: "top",
+  },
+  modalShareBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 16, borderRadius: 14,
+  },
+  modalShareText: { fontSize: 16, fontFamily: "DMSans_700Bold" },
+  card: {
+    borderRadius: 18, borderWidth: 1, overflow: "hidden", padding: 14, gap: 0,
+  },
+  card1: {},
   cardRow: { flexDirection: "row", gap: 12 },
-  cardImgBox: { width: 86, height: 105, borderRadius: 10, overflow: "hidden", position: "relative" },
+  cardImgBox: { width: 90, height: 110, borderRadius: 12, overflow: "hidden", position: "relative" },
   cardImg: { width: "100%", height: "100%" },
-  cardImgPlaceholder: { width: "100%", height: "100%", backgroundColor: Colors.surface2, alignItems: "center", justifyContent: "center" },
-  aiTag: { position: "absolute", bottom: 5, left: 5, flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "rgba(0,0,0,0.75)", paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: "rgba(201,168,76,0.4)" },
-  aiTagText: { fontSize: 8, fontFamily: "DMSans_700Bold", color: Colors.gold },
+  cardImgPlaceholder: { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
+  aiTag: {
+    position: "absolute", bottom: 4, left: 4,
+    flexDirection: "row", alignItems: "center", gap: 2,
+    backgroundColor: "rgba(0,0,0,0.75)", paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4,
+  },
+  aiTagText: { fontSize: 7, fontFamily: "DMSans_700Bold" },
   cardInfo: { flex: 1, gap: 5, justifyContent: "center" },
-  rankBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 1, alignSelf: "flex-start" },
-  rankText: { fontSize: 11, fontFamily: "DMSans_700Bold" },
-  cutName: { fontSize: 15, fontFamily: "DMSans_700Bold", color: Colors.text, letterSpacing: -0.2 },
-  cutDesc: { fontSize: 11, fontFamily: "DMSans_400Regular", color: Colors.textSecondary, lineHeight: 16 },
+  rankBadge: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 1, alignSelf: "flex-start",
+  },
+  rankText: { fontSize: 10, fontFamily: "DMSans_700Bold" },
+  cutName: { fontSize: 16, fontFamily: "DMSans_700Bold" },
+  cutDesc: { fontSize: 12, fontFamily: "DMSans_400Regular", lineHeight: 17 },
   diffRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  diffDot: { width: 5, height: 5, borderRadius: 3 },
-  diffText: { fontSize: 10, fontFamily: "DMSans_500Medium" },
-  whyBox: { flexDirection: "row", gap: 7, backgroundColor: "rgba(201,168,76,0.06)", borderRadius: 10, padding: 9, borderWidth: 1, borderColor: "rgba(201,168,76,0.13)", alignItems: "flex-start" },
-  whyText: { flex: 1, fontSize: 12, fontFamily: "DMSans_400Regular", color: Colors.textSecondary, lineHeight: 17 },
-
-  // Share bar
-  shareBar: { position: "absolute", bottom: 0, left: 0, right: 0, flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingTop: 12, backgroundColor: Colors.background, borderTopWidth: 1, borderTopColor: Colors.border },
-  keepBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14, backgroundColor: Colors.surface, borderRadius: 14, borderWidth: 1, borderColor: Colors.border },
-  keepBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium", color: Colors.textSecondary },
-  shareBtn: { flex: 2, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14, backgroundColor: Colors.gold, borderRadius: 14 },
-  shareBtnText: { fontSize: 14, fontFamily: "DMSans_700Bold", color: Colors.background },
-
-  // Share Modal
-  modalOverlay: { flex: 1, justifyContent: "flex-end" },
-  modalCard: { backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, gap: 14, borderWidth: 1, borderColor: Colors.border },
-  modalHandle: { width: 40, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: "center", marginBottom: 4 },
-  modalTitle: { fontSize: 20, fontFamily: "DMSans_700Bold", color: Colors.text },
-  modalSubtitle: { fontSize: 13, fontFamily: "DMSans_400Regular", color: Colors.textSecondary },
-  captionInput: { backgroundColor: Colors.surface2, borderRadius: 12, padding: 14, color: Colors.text, fontFamily: "DMSans_400Regular", fontSize: 14, minHeight: 80, borderWidth: 1, borderColor: Colors.border },
-  modalShareBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 16, backgroundColor: Colors.gold, borderRadius: 14 },
-  modalShareText: { fontSize: 15, fontFamily: "DMSans_700Bold", color: Colors.background },
+  diffDot: { width: 6, height: 6, borderRadius: 3 },
+  diffText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
+  whyBox: {
+    flexDirection: "row", alignItems: "flex-start", gap: 6,
+    paddingTop: 10, marginTop: 10, borderTopWidth: 1,
+  },
+  whyText: { flex: 1, fontSize: 12, fontFamily: "DMSans_400Regular", lineHeight: 17 },
+  cardSkeleton: { flexDirection: "row", gap: 12, padding: 14, borderRadius: 18, borderWidth: 1 },
+  skeletonImg: { width: 90, height: 110, borderRadius: 12 },
+  skeletonLines: { flex: 1, gap: 8, justifyContent: "center" },
+  skeletonLine: { height: 10, borderRadius: 5 },
 });

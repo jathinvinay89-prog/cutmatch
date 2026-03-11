@@ -1,24 +1,17 @@
 const GOLD = "#C9A84C";
 const GOLD_LIGHT = "#E8C97A";
-const CHARCOAL = "#0A0A0A";
-const SURFACE = "#141414";
-const SURFACE_2 = "#1E1E1E";
-const BORDER = "#2A2A2A";
-const TEXT = "#F5F0E8";
-const TEXT_SECONDARY = "#8A8580";
-const WHITE = "#FFFFFF";
 const ERROR = "#FF4444";
 
-export const Colors = {
+export const DarkColors = {
   gold: GOLD,
   goldLight: GOLD_LIGHT,
-  background: CHARCOAL,
-  surface: SURFACE,
-  surface2: SURFACE_2,
-  border: BORDER,
-  text: TEXT,
-  textSecondary: TEXT_SECONDARY,
-  white: WHITE,
+  background: "#0A0A0A",
+  surface: "#141414",
+  surface2: "#1E1E1E",
+  border: "#2A2A2A",
+  text: "#F5F0E8",
+  textSecondary: "#8A8580",
+  white: "#FFFFFF",
   error: ERROR,
   rank1: "#C9A84C",
   rank2: "#A0A0A0",
@@ -26,12 +19,38 @@ export const Colors = {
   rank4: "#6A6A6A",
 };
 
+export const LightColors = {
+  gold: "#B8942A",
+  goldLight: GOLD_LIGHT,
+  background: "#F5F0E8",
+  surface: "#FFFFFF",
+  surface2: "#EDE8E0",
+  border: "#D8D0C4",
+  text: "#1A1612",
+  textSecondary: "#7A726A",
+  white: "#FFFFFF",
+  error: ERROR,
+  rank1: "#B8942A",
+  rank2: "#808080",
+  rank3: "#9B5F1A",
+  rank4: "#5A5A5A",
+};
+
+export const Colors = DarkColors;
+
 export default {
   light: {
-    text: TEXT,
-    background: CHARCOAL,
+    text: LightColors.text,
+    background: LightColors.background,
     tint: GOLD,
-    tabIconDefault: TEXT_SECONDARY,
+    tabIconDefault: LightColors.textSecondary,
+    tabIconSelected: GOLD,
+  },
+  dark: {
+    text: DarkColors.text,
+    background: DarkColors.background,
+    tint: GOLD,
+    tabIconDefault: DarkColors.textSecondary,
     tabIconSelected: GOLD,
   },
 };

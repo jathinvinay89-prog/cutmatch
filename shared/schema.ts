@@ -7,6 +7,7 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").notNull().unique(),
   displayName: text("display_name").notNull(),
+  password: text("password").notNull().default(""),
   avatarUrl: text("avatar_url"),
   bio: text("bio").default(""),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
@@ -22,6 +23,7 @@ export const posts = pgTable("posts", {
   recommendations: jsonb("recommendations").notNull(),
   caption: text("caption").default(""),
   isPublic: boolean("is_public").default(true),
+  postType: text("post_type").default("cutmatch"),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
 });
 
@@ -46,6 +48,22 @@ export const directMessages = pgTable("direct_messages", {
   senderId: integer("sender_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   receiverId: integer("receiver_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   content: text("content").notNull(),
+  messageType: text("message_type").notNull().default("text"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").default(sql`now()`).notNull(),
+});
+
+export const competitions = pgTable("competitions", {
+  id: serial("id").primaryKey(),
+  challengerId: integer("challenger_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  challengeeId: integer("challengee_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  challengerPostId: integer("challenger_post_id").references(() => posts.id, { onDelete: "set null" }),
+  challengeePostId: integer("challengee_post_id").references(() => posts.id, { onDelete: "set null" }),
+  challengerVotes: integer("challenger_votes").default(0),
+  challengeeVotes: integer("challengee_votes").default(0),
+  status: text("status").notNull().default("pending"),
+  expiresAt: timestamp("expires_at"),
+  winnerId: integer("winner_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
 });
 
@@ -54,6 +72,7 @@ export const insertPostSchema = createInsertSchema(posts).omit({ id: true, creat
 export const insertRatingSchema = createInsertSchema(ratings).omit({ id: true, createdAt: true });
 export const insertFriendshipSchema = createInsertSchema(friendships).omit({ id: true, createdAt: true });
 export const insertMessageSchema = createInsertSchema(directMessages).omit({ id: true, createdAt: true });
+export const insertCompetitionSchema = createInsertSchema(competitions).omit({ id: true, createdAt: true });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -62,3 +81,4 @@ export type InsertPost = z.infer<typeof insertPostSchema>;
 export type Rating = typeof ratings.$inferSelect;
 export type Friendship = typeof friendships.$inferSelect;
 export type DirectMessage = typeof directMessages.$inferSelect;
+export type Competition = typeof competitions.$inferSelect;

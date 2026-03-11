@@ -2,8 +2,9 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
-import { users, posts, ratings, friendships, directMessages } from "@shared/schema";
-import { eq, desc, and, or, ne } from "drizzle-orm";
+import { users, posts, ratings, friendships, directMessages, competitions } from "@shared/schema";
+import { eq, desc, and, or, ne, sql } from "drizzle-orm";
+import crypto from "crypto";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -14,6 +15,10 @@ function getOpenAI(): OpenAI {
     });
   }
   return _openai;
+}
+
+function hashPassword(password: string): string {
+  return crypto.createHash("sha256").update(password + "cutmatch_salt").digest("hex");
 }
 
 interface HaircutRec {
@@ -38,7 +43,7 @@ interface FaceAnalysis {
 
 async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
   const response = await getOpenAI().chat.completions.create({
-    model: "gpt-5.1",
+    model: "gpt-4o",
     messages: [
       {
         role: "system",
@@ -68,11 +73,11 @@ Return ONLY valid JSON (no markdown):
         role: "user",
         content: [
           { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
-          { type: "text", text: "Analyze face and give 4 best haircuts with detailed image prompts." },
+          { type: "text", text: "Analyze face and give 4 best haircuts with detailed image prompts. Be very fast and concise." },
         ],
       },
     ],
-    max_completion_tokens: 2048,
+    max_completion_tokens: 1500,
   });
 
   const content = response.choices[0]?.message?.content || "{}";
@@ -84,21 +89,20 @@ Return ONLY valid JSON (no markdown):
 async function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
   try {
     const glasses = analysis.hasGlasses ? "wearing stylish glasses, " : "";
-    const prompt = `Professional studio portrait photograph of a ${analysis.ageRange} ${analysis.gender} with ${analysis.skinTone} skin, ${glasses}with this exact hairstyle:
-
-${rec.name}: ${rec.imagePrompt}
-Details: ${rec.description}
-
-Clean neutral background, soft studio lighting, photorealistic, high quality, sharp focus on hair and face, professional portrait style.`;
+    const prompt = `Professional portrait of ${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin, ${glasses}${rec.name} hairstyle: ${rec.imagePrompt}. Studio lighting, photorealistic, high quality, neutral background.`;
 
     const response = await getOpenAI().images.generate({
-      model: "gpt-image-1",
-      prompt,
-      size: "1024x1024",
-      quality: "low",
+      model: "dall-e-2",
+      prompt: prompt.slice(0, 999),
+      size: "512x512",
+      n: 1,
     });
 
-    return response.data[0]?.b64_json ?? null;
+    const url = response.data[0]?.url;
+    if (!url) return null;
+    const imgRes = await fetch(url);
+    const buf = await imgRes.arrayBuffer();
+    return Buffer.from(buf).toString("base64");
   } catch (err: any) {
     console.error(`Image gen failed for ${rec.name}:`, err?.message);
     return null;
@@ -106,6 +110,46 @@ Clean neutral background, soft studio lighting, photorealistic, high quality, sh
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // ── AUTH ──────────────────────────────────────────────────────────────
+  app.post("/api/auth/register", async (req: Request, res: Response) => {
+    try {
+      const { username, password, displayName } = req.body;
+      if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+      const clean = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+      if (clean.length < 3) return res.status(400).json({ error: "Username must be at least 3 characters" });
+      if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
+      const hashed = hashPassword(password);
+      const name = (displayName || clean).trim();
+      const [user] = await db
+        .insert(users)
+        .values({ username: clean, displayName: name, password: hashed })
+        .returning();
+      const { password: _, ...safeUser } = user;
+      res.status(201).json(safeUser);
+    } catch (err: any) {
+      if (err.message?.includes("unique")) return res.status(409).json({ error: "Username already taken" });
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+      const clean = username.trim().toLowerCase();
+      const [user] = await db.select().from(users).where(eq(users.username, clean));
+      if (!user) return res.status(401).json({ error: "Invalid username or password" });
+      const hashed = hashPassword(password);
+      if (user.password !== hashed && user.password !== "") {
+        return res.status(401).json({ error: "Invalid username or password" });
+      }
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
+    } catch {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   // ── STREAMING ANALYZE (SSE) ──────────────────────────────────────────
   app.post("/api/analyze-stream", async (req: Request, res: Response) => {
     const { image } = req.body;
@@ -141,17 +185,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })),
       });
 
-      send("status", { message: "Generating your AI haircut looks..." });
+      send("status", { message: "Generating AI looks..." });
 
-      await Promise.all(
-        analysis.recommendations.map(async (rec) => {
-          const b64 = await generateHaircutImage(analysis, rec);
-          send("image", {
-            rank: rec.rank,
-            generatedImage: b64 ? `data:image/png;base64,${b64}` : null,
-          });
-        })
-      );
+      const sorted = [...analysis.recommendations].sort((a, b) => a.rank - b.rank);
+      for (const rec of sorted) {
+        const b64 = await generateHaircutImage(analysis, rec);
+        send("image", {
+          rank: rec.rank,
+          generatedImage: b64 ? `data:image/png;base64,${b64}` : null,
+        });
+      }
 
       send("done", {});
       res.end();
@@ -161,12 +204,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── AVATAR UPLOAD ─────────────────────────────────────────────────────
+  app.post("/api/users/:id/avatar", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const { avatarUrl } = req.body;
+      if (!avatarUrl) return res.status(400).json({ error: "avatarUrl required" });
+      const [updated] = await db.update(users).set({ avatarUrl }).where(eq(users.id, userId)).returning();
+      if (!updated) return res.status(404).json({ error: "User not found" });
+      const { password: _, ...safeUser } = updated;
+      res.json(safeUser);
+    } catch {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   // ── USERS ────────────────────────────────────────────────────────────
   app.get("/api/users/:id", async (req: Request, res: Response) => {
     try {
       const [user] = await db.select().from(users).where(eq(users.id, parseInt(req.params.id)));
       if (!user) return res.status(404).json({ error: "User not found" });
-      res.json(user);
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
@@ -175,9 +234,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { username, displayName } = req.body;
       const [user] = await db
         .insert(users)
-        .values({ username, displayName })
+        .values({ username, displayName, password: "" })
         .returning();
-      res.status(201).json(user);
+      const { password: _, ...safeUser } = user;
+      res.status(201).json(safeUser);
     } catch (err: any) {
       if (err.message?.includes("unique")) return res.status(409).json({ error: "Username taken" });
       res.status(500).json({ error: "Server error" });
@@ -188,7 +248,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const [user] = await db.select().from(users).where(eq(users.username, req.params.username));
       if (!user) return res.status(404).json({ error: "Not found" });
-      res.json(user);
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
@@ -224,12 +285,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
+  app.get("/api/users/:id/posts", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const userPosts = await db
+        .select()
+        .from(posts)
+        .where(eq(posts.userId, userId))
+        .orderBy(desc(posts.createdAt))
+        .limit(20);
+      res.json(userPosts);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
   app.post("/api/posts", async (req: Request, res: Response) => {
     try {
-      const { userId, facePhotoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic } = req.body;
+      const { userId, facePhotoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic, postType } = req.body;
       const [post] = await db
         .insert(posts)
-        .values({ userId, facePhotoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic })
+        .values({ userId, facePhotoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic, postType: postType || "cutmatch" })
         .returning();
       res.status(201).json(post);
     } catch (err: any) {
@@ -292,7 +366,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ));
       const friendIds = accepted.map((f) => f.requesterId === userId ? f.addresseeId : f.requesterId);
       const friendList = friendIds.length
-        ? await db.select().from(users).where(or(...friendIds.map((id) => eq(users.id, id))))
+        ? await db.select({ id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl })
+            .from(users)
+            .where(or(...friendIds.map((id) => eq(users.id, id))))
         : [];
       res.json(friendList);
     } catch { res.status(500).json({ error: "Server error" }); }
@@ -317,9 +393,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/messages", async (req: Request, res: Response) => {
     try {
-      const { senderId, receiverId, content } = req.body;
-      const [msg] = await db.insert(directMessages).values({ senderId, receiverId, content }).returning();
+      const { senderId, receiverId, content, messageType, metadata } = req.body;
+      const [msg] = await db.insert(directMessages).values({
+        senderId, receiverId, content,
+        messageType: messageType || "text",
+        metadata: metadata || null,
+      }).returning();
       res.status(201).json(msg);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  // ── COMPETITIONS ──────────────────────────────────────────────────────
+  app.post("/api/competitions", async (req: Request, res: Response) => {
+    try {
+      const { challengerId, challengeeId } = req.body;
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const [comp] = await db
+        .insert(competitions)
+        .values({ challengerId, challengeeId, status: "pending", expiresAt })
+        .returning();
+      res.status(201).json(comp);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.get("/api/competitions/:id", async (req: Request, res: Response) => {
+    try {
+      const compId = parseInt(req.params.id);
+      const [comp] = await db.select().from(competitions).where(eq(competitions.id, compId));
+      if (!comp) return res.status(404).json({ error: "Not found" });
+
+      const now = new Date();
+      if (comp.expiresAt && now > comp.expiresAt && comp.status !== "completed") {
+        const winnerId = (comp.challengerVotes ?? 0) >= (comp.challengeeVotes ?? 0)
+          ? comp.challengerId
+          : comp.challengeeId;
+        const [updated] = await db.update(competitions)
+          .set({ status: "completed", winnerId })
+          .where(eq(competitions.id, compId))
+          .returning();
+        return res.json(updated);
+      }
+      res.json(comp);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.post("/api/competitions/:id/submit", async (req: Request, res: Response) => {
+    try {
+      const compId = parseInt(req.params.id);
+      const { userId, postId } = req.body;
+      const [comp] = await db.select().from(competitions).where(eq(competitions.id, compId));
+      if (!comp) return res.status(404).json({ error: "Not found" });
+
+      const updates: any = {};
+      if (comp.challengerId === userId) updates.challengerPostId = postId;
+      else if (comp.challengeeId === userId) updates.challengeePostId = postId;
+      else return res.status(403).json({ error: "Not a participant" });
+
+      const newChallengerPostId = updates.challengerPostId ?? comp.challengerPostId;
+      const newChallengeePostId = updates.challengeePostId ?? comp.challengeePostId;
+      if (newChallengerPostId && newChallengeePostId) updates.status = "active";
+
+      const [updated] = await db.update(competitions).set(updates).where(eq(competitions.id, compId)).returning();
+      res.json(updated);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.post("/api/competitions/:id/vote", async (req: Request, res: Response) => {
+    try {
+      const compId = parseInt(req.params.id);
+      const { votedForUserId } = req.body;
+      const [comp] = await db.select().from(competitions).where(eq(competitions.id, compId));
+      if (!comp) return res.status(404).json({ error: "Not found" });
+      if (comp.status !== "active") return res.status(400).json({ error: "Competition not active" });
+
+      const updates: any = {};
+      if (comp.challengerId === votedForUserId) {
+        updates.challengerVotes = (comp.challengerVotes ?? 0) + 1;
+      } else if (comp.challengeeId === votedForUserId) {
+        updates.challengeeVotes = (comp.challengeeVotes ?? 0) + 1;
+      } else {
+        return res.status(400).json({ error: "Invalid vote target" });
+      }
+
+      const [updated] = await db.update(competitions).set(updates).where(eq(competitions.id, compId)).returning();
+      res.json(updated);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.get("/api/competitions/active/feed", async (req: Request, res: Response) => {
+    try {
+      const now = new Date();
+      const activeComps = await db
+        .select()
+        .from(competitions)
+        .where(and(eq(competitions.status, "active")))
+        .orderBy(desc(competitions.createdAt))
+        .limit(10);
+      res.json(activeComps);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.get("/api/users/:userId/competitions", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      const userComps = await db
+        .select()
+        .from(competitions)
+        .where(or(eq(competitions.challengerId, userId), eq(competitions.challengeeId, userId)))
+        .orderBy(desc(competitions.createdAt));
+      res.json(userComps);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 

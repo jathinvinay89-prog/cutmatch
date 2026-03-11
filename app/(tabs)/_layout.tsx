@@ -3,24 +3,27 @@ import { BlurView } from "expo-blur";
 import { Platform, StyleSheet } from "react-native";
 import React from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors } from "@/constants/colors";
+import { useApp } from "@/context/AppContext";
 
 export default function TabLayout() {
+  const { colors } = useApp();
+  const C = colors;
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.gold,
-        tabBarInactiveTintColor: Colors.textSecondary,
+        tabBarActiveTintColor: C.gold,
+        tabBarInactiveTintColor: C.textSecondary,
         tabBarStyle: {
           position: "absolute",
           backgroundColor: Platform.select({
             ios: "transparent",
-            android: Colors.surface,
-            web: Colors.surface,
+            android: C.surface,
+            web: C.surface,
           }),
           borderTopWidth: 1,
-          borderTopColor: Colors.border,
+          borderTopColor: C.border,
           elevation: 0,
           height: Platform.OS === "web" ? 84 : undefined,
           paddingBottom: Platform.OS === "web" ? 34 : undefined,
@@ -29,7 +32,7 @@ export default function TabLayout() {
           Platform.OS === "ios" ? (
             <BlurView
               intensity={90}
-              tint="dark"
+              tint={C.background === "#0A0A0A" ? "dark" : "light"}
               style={StyleSheet.absoluteFill}
             />
           ) : null,
@@ -63,6 +66,15 @@ export default function TabLayout() {
           title: "Messages",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubble-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: "Settings",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="settings-outline" size={size} color={color} />
           ),
         }}
       />
