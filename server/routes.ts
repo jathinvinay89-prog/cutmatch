@@ -5,10 +5,16 @@ import { db } from "./db";
 import { users, posts, ratings, friendships, directMessages } from "@shared/schema";
 import { eq, desc, and, or, ne } from "drizzle-orm";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({
+      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+    });
+  }
+  return _openai;
+}
 
 interface HaircutRec {
   rank: number;
@@ -31,7 +37,7 @@ interface FaceAnalysis {
 }
 
 async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: "gpt-5.1",
     messages: [
       {
@@ -85,7 +91,7 @@ Details: ${rec.description}
 
 Clean neutral background, soft studio lighting, photorealistic, high quality, sharp focus on hair and face, professional portrait style.`;
 
-    const response = await openai.images.generate({
+    const response = await getOpenAI().images.generate({
       model: "gpt-image-1",
       prompt,
       size: "1024x1024",
