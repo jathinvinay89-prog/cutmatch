@@ -30,7 +30,9 @@ function saveImageFile(base64Data: string, ext = "png"): string {
   return `${getServerBase()}/uploads/${filename}`;
 }
 
-// ── OPENAI ───────────────────────────────────────────────────────────────────
+// ── REPLIT AI (via OpenAI-compatible integration) ────────────────────────────
+// Uses Replit's managed AI credentials from the built-in AI integration.
+// Models: gpt-5.1 for chat/analysis, gpt-image-1 for image generation.
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!_openai) {
@@ -40,6 +42,20 @@ function getOpenAI(): OpenAI {
   }
   return _openai;
 }
+
+// ── 2-FACTOR REGISTRATION CODES ──────────────────────────────────────────────
+interface PendingReg {
+  username: string; password: string; displayName: string;
+  code: string; expiresAt: Date;
+}
+const pendingRegistrations = new Map<string, PendingReg>();
+// Clean up expired pending registrations every 10 minutes
+setInterval(() => {
+  const now = new Date();
+  for (const [id, reg] of pendingRegistrations.entries()) {
+    if (now > reg.expiresAt) pendingRegistrations.delete(id);
+  }
+}, 10 * 60 * 1000);
 
 function hashPassword(p: string): string {
   return crypto.createHash("sha256").update(p + "cutmatch_salt").digest("hex");
@@ -67,7 +83,7 @@ interface FaceAnalysis {
 
 async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
   const response = await getOpenAI().chat.completions.create({
-    model: "gpt-4o",
+    model: "gpt-5.1",
     messages: [
       {
         role: "system",
@@ -97,19 +113,24 @@ async function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): Pr
     const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
     const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background. High quality.`;
 
+    // Use Replit's built-in gpt-image-1 model — returns base64 JSON
     const response = await getOpenAI().images.generate({
-      model: "dall-e-2",
+      model: "gpt-image-1",
       prompt: prompt.slice(0, 999),
-      size: "512x512",
       n: 1,
-    });
+    } as any);
 
-    const url = response.data[0]?.url;
-    if (!url) return null;
-    const imgRes = await fetch(url);
-    const buf = await imgRes.arrayBuffer();
-    const b64 = Buffer.from(buf).toString("base64");
-    return saveImageFile(b64, "png");
+    const b64 = (response.data[0] as any)?.b64_json;
+    if (b64) return saveImageFile(b64, "png");
+
+    // Fallback: if URL is returned instead
+    const url = (response.data[0] as any)?.url;
+    if (url) {
+      const imgRes = await fetch(url);
+      const buf = await imgRes.arrayBuffer();
+      return saveImageFile(Buffer.from(buf).toString("base64"), "png");
+    }
+    return null;
   } catch (err: any) {
     console.error(`Image gen failed for ${rec.name}:`, err?.message);
     return null;
@@ -205,6 +226,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
+
+  // Step 1: Begin registration — validates input, generates verification code
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
       const { username, password, displayName } = req.body;
@@ -212,9 +235,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const clean = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
       if (clean.length < 3) return res.status(400).json({ error: "Username must be at least 3 characters" });
       if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
-      const hashed = hashPassword(password);
+
+      // Check username not already taken
+      const [existing] = await db.select().from(users).where(eq(users.username, clean));
+      if (existing) return res.status(409).json({ error: "Username already taken" });
+
+      // Generate 6-digit verification code (2FA step)
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const pendingId = crypto.randomUUID();
       const name = (displayName || clean).trim();
-      const [user] = await db.insert(users).values({ username: clean, displayName: name, password: hashed }).returning();
+
+      pendingRegistrations.set(pendingId, {
+        username: clean, password: hashPassword(password), displayName: name,
+        code, expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min expiry
+      });
+
+      // In production this code would be emailed/SMS'd.
+      // For this app, we return it so the UI can display it.
+      res.status(200).json({ pendingId, verificationCode: code, requiresVerification: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // Step 2: Verify code — completes registration and creates user account
+  app.post("/api/auth/verify-registration", async (req: Request, res: Response) => {
+    try {
+      const { pendingId, code } = req.body;
+      if (!pendingId || !code) return res.status(400).json({ error: "Verification data required" });
+
+      const pending = pendingRegistrations.get(pendingId);
+      if (!pending) return res.status(400).json({ error: "Verification expired. Please start again." });
+      if (new Date() > pending.expiresAt) {
+        pendingRegistrations.delete(pendingId);
+        return res.status(400).json({ error: "Code expired. Please start again." });
+      }
+      if (pending.code !== code.trim()) return res.status(400).json({ error: "Incorrect code. Try again." });
+
+      // Code is valid — create the user
+      pendingRegistrations.delete(pendingId);
+      const [user] = await db.insert(users)
+        .values({ username: pending.username, displayName: pending.displayName, password: pending.password })
+        .returning();
       const { password: _, ...safeUser } = user;
       res.status(201).json(safeUser);
     } catch (err: any) {

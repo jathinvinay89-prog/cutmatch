@@ -27,6 +27,7 @@ type AuthStep =
   | "welcome"
   | "register_creds"
   | "login_creds"
+  | "verify"
   | "avatar_choice"
   | "avatar_standard"
   | "avatar_virtual"
@@ -42,7 +43,7 @@ interface HaircutOption {
 
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
-  const { register, login, uploadAvatar, apiBase } = useApp();
+  const { login, uploadAvatar, setCurrentUser, apiBase } = useApp();
   const [step, setStep] = useState<AuthStep>("welcome");
 
   const [username, setUsername] = useState("");
@@ -51,6 +52,13 @@ export default function AuthScreen() {
   const [displayName, setDisplayName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // 2FA verification state
+  const [pendingId, setPendingId] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [enteredCode, setEnteredCode] = useState("");
+
+  // Avatar state
   const [pendingUser, setPendingUser] = useState<{ id: number } | null>(null);
   const [haircuts, setHaircuts] = useState<HaircutOption[]>([]);
   const [analysisStatus, setAnalysisStatus] = useState("Analyzing your face...");
@@ -66,8 +74,11 @@ export default function AuthScreen() {
     border: "#2A2A2A",
     text: "#F5F0E8",
     textSec: "#8A8580",
+    success: "#4CAF50",
+    error: "#FF4444",
   };
 
+  // ── STEP 1: Begin registration ──────────────────────────────────────────────
   const handleRegister = async () => {
     if (!username.trim()) return Alert.alert("", "Enter a username");
     if (!password.trim()) return Alert.alert("", "Enter a password");
@@ -76,11 +87,46 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       const name = displayName.trim() || username.trim();
-      const user = await register(username.trim(), password, name);
-      setPendingUser(user);
-      setStep("avatar_choice");
+      const url = new URL("/api/auth/register", apiBase).toString();
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim(), password, displayName: name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Registration failed");
+
+      // Server returns pending ID + verification code (2FA)
+      setPendingId(data.pendingId);
+      setVerificationCode(data.verificationCode);
+      setEnteredCode("");
+      setStep("verify");
     } catch (e: any) {
       Alert.alert("Error", e.message || "Registration failed");
+    }
+    setLoading(false);
+  };
+
+  // ── STEP 2: Verify 2FA code ─────────────────────────────────────────────────
+  const handleVerify = async () => {
+    if (enteredCode.length !== 6) return Alert.alert("", "Enter the 6-digit code");
+    setLoading(true);
+    try {
+      const url = new URL("/api/auth/verify-registration", apiBase).toString();
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingId, code: enteredCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verification failed");
+
+      // User created — set in context and proceed to avatar
+      setCurrentUser(data);
+      setPendingUser({ id: data.id });
+      setStep("avatar_choice");
+    } catch (e: any) {
+      Alert.alert("Verification Failed", e.message || "Code incorrect");
     }
     setLoading(false);
   };
@@ -130,46 +176,33 @@ export default function AuthScreen() {
     if (status !== "granted") return Alert.alert("Camera permission needed");
 
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.5,
-      base64: true,
+      mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
     });
-
     if (result.canceled || !result.assets[0]) return;
-
     const b64 = result.assets[0].base64;
-    if (!b64) {
-      Alert.alert("Error", "Could not get image data. Please try again.");
-      return;
-    }
+    if (!b64) { Alert.alert("Error", "Could not read photo. Try again."); return; }
 
     setStep("avatar_virtual_analyzing");
-    setAnalysisStatus("Uploading photo...");
+    setAnalysisStatus("Analyzing your face shape with Replit AI...");
     setHaircuts([]);
 
     try {
-      setAnalysisStatus("Analyzing your face shape...");
       const url = new URL("/api/analyze-simple", apiBase).toString();
-
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: `data:image/jpeg;base64,${b64}` }),
       });
-
       if (!response.ok) {
         const err = await response.json().catch(() => ({ error: "Analysis failed" }));
         throw new Error(err.error || "Analysis failed");
       }
-
       setAnalysisStatus("Generating your AI looks...");
       const data = await response.json();
       setHaircuts(data.recommendations || []);
       setStep("avatar_virtual_results");
     } catch (e: any) {
-      Alert.alert("Analysis Failed", e.message || "Could not analyze photo. Please try again.");
+      Alert.alert("Analysis Failed", e.message || "Could not analyze photo. Try again.");
       setStep("avatar_virtual");
     }
   };
@@ -178,9 +211,7 @@ export default function AuthScreen() {
     if (!pendingUser) { router.replace("/(tabs)"); return; }
     if (!haircut.generatedImage) { skipAvatar(); return; }
     setLoading(true);
-    try {
-      await uploadAvatar(pendingUser.id, haircut.generatedImage);
-    } catch {}
+    try { await uploadAvatar(pendingUser.id, haircut.generatedImage); } catch {}
     setLoading(false);
     router.replace("/(tabs)");
   };
@@ -227,8 +258,8 @@ export default function AuthScreen() {
           <Text style={[s.formSubtitle, { color: C.textSec }]}>Join CutMatch to share and discover haircuts</Text>
 
           {[
-            { label: "Display Name", value: displayName, onChange: setDisplayName, placeholder: "Your name", autoCapitalize: "words" as const, secure: false },
-            { label: "Username", value: username, onChange: setUsername, placeholder: "letters, numbers, _", autoCapitalize: "none" as const, secure: false },
+            { label: "Display Name", value: displayName, onChange: setDisplayName, placeholder: "Your name", autoCapitalize: "words" as const },
+            { label: "Username", value: username, onChange: setUsername, placeholder: "letters, numbers, _", autoCapitalize: "none" as const },
           ].map((f) => (
             <View key={f.label} style={s.inputGroup}>
               <Text style={[s.inputLabel, { color: C.textSec }]}>{f.label}</Text>
@@ -259,12 +290,78 @@ export default function AuthScreen() {
 
           <Pressable style={[s.primaryBtn, { backgroundColor: C.gold, marginTop: 8, opacity: loading ? 0.7 : 1 }]} onPress={handleRegister} disabled={loading}>
             {loading ? <ActivityIndicator color={C.bg} /> : (
-              <><Text style={[s.primaryBtnText, { color: C.bg }]}>Create Account</Text><Ionicons name="arrow-forward" size={18} color={C.bg} /></>
+              <><Text style={[s.primaryBtnText, { color: C.bg }]}>Continue</Text><Ionicons name="arrow-forward" size={18} color={C.bg} /></>
             )}
           </Pressable>
 
           <Pressable onPress={() => setStep("login_creds")}>
             <Text style={[s.switchText, { color: C.textSec }]}>Already have an account? <Text style={{ color: C.gold }}>Sign In</Text></Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  // ── 2FA VERIFICATION ──────────────────────────────────────────────────────
+  if (step === "verify") {
+    return (
+      <KeyboardAvoidingView style={[s.container, { backgroundColor: C.bg }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <LinearGradient colors={["#141414", "#0A0A0A"]} style={StyleSheet.absoluteFill} />
+        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]}>
+          <Pressable style={s.backBtn} onPress={() => setStep("register_creds")}>
+            <Ionicons name="chevron-back" size={22} color={C.text} />
+          </Pressable>
+
+          <View style={s.shieldIcon}>
+            <View style={[s.shieldCircle, { borderColor: C.gold, backgroundColor: C.gold + "12" }]}>
+              <Ionicons name="shield-checkmark" size={38} color={C.gold} />
+            </View>
+          </View>
+
+          <Text style={[s.formTitle, { color: C.text }]}>2-Step Verification</Text>
+          <Text style={[s.formSubtitle, { color: C.textSec }]}>
+            To protect your account, enter the 6-digit code below to complete your registration.
+          </Text>
+
+          <View style={[s.codeDisplay, { backgroundColor: C.surface, borderColor: C.gold + "50" }]}>
+            <LinearGradient colors={[C.gold + "15", "transparent"]} style={StyleSheet.absoluteFill} />
+            <View style={s.codeDisplayTop}>
+              <Ionicons name="key-outline" size={14} color={C.gold} />
+              <Text style={[s.codeDisplayLabel, { color: C.gold }]}>Your Verification Code</Text>
+            </View>
+            <Text style={[s.codeDisplayValue, { color: C.text }]}>{verificationCode}</Text>
+            <Text style={[s.codeDisplayNote, { color: C.textSec }]}>
+              In production this would be sent via email or SMS.{"\n"}Enter this code below to verify your identity.
+            </Text>
+          </View>
+
+          <View style={s.inputGroup}>
+            <Text style={[s.inputLabel, { color: C.textSec }]}>Verification Code</Text>
+            <TextInput
+              style={[s.codeInput, { backgroundColor: C.surface2, borderColor: enteredCode.length === 6 ? C.gold : C.border, color: C.text }]}
+              placeholder="Enter 6-digit code"
+              placeholderTextColor={C.textSec}
+              value={enteredCode}
+              onChangeText={(t) => setEnteredCode(t.replace(/\D/g, "").slice(0, 6))}
+              keyboardType="number-pad"
+              maxLength={6}
+              textAlign="center"
+            />
+          </View>
+
+          <View style={[s.securityNote, { backgroundColor: C.surface, borderColor: C.border }]}>
+            <Ionicons name="information-circle-outline" size={15} color={C.textSec} />
+            <Text style={[s.securityNoteText, { color: C.textSec }]}>This code expires in 10 minutes for security.</Text>
+          </View>
+
+          <Pressable
+            style={[s.primaryBtn, { backgroundColor: enteredCode.length === 6 ? C.gold : C.border, marginTop: 8, opacity: loading ? 0.7 : 1 }]}
+            onPress={handleVerify}
+            disabled={loading || enteredCode.length !== 6}
+          >
+            {loading ? <ActivityIndicator color={C.bg} /> : (
+              <><Ionicons name="shield-checkmark" size={18} color={C.bg} /><Text style={[s.primaryBtnText, { color: C.bg }]}>Verify & Create Account</Text></>
+            )}
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -325,8 +422,8 @@ export default function AuthScreen() {
           <View style={[s.logoRing, { borderColor: C.gold, marginBottom: 8 }]}>
             <Ionicons name="person-circle-outline" size={40} color={C.gold} />
           </View>
-          <Text style={[s.formTitle, { color: C.text, textAlign: "center" }]}>Set Profile Picture</Text>
-          <Text style={[s.formSubtitle, { color: C.textSec, textAlign: "center" }]}>How do you want to set up your profile?</Text>
+          <Text style={[s.formTitle, { color: C.text, textAlign: "center" }]}>Account Created!</Text>
+          <Text style={[s.formSubtitle, { color: C.textSec, textAlign: "center" }]}>Now set up your profile picture</Text>
 
           {[
             { icon: "camera-outline" as const, title: "Standard Photo", desc: "Take a photo or pick from gallery", step: "avatar_standard" as AuthStep },
@@ -400,7 +497,7 @@ export default function AuthScreen() {
           </Pressable>
           <Text style={[s.formTitle, { color: C.text, textAlign: "center" }]}>Virtual AI Avatar</Text>
           <Text style={[s.formSubtitle, { color: C.textSec, textAlign: "center" }]}>
-            Take a selfie and AI will generate your avatar with the best haircut for your face shape
+            Powered by Replit AI — take a selfie and generate your avatar with the best haircut for your face shape
           </Text>
 
           <View style={[s.circleCam, { borderColor: C.gold }]}>
@@ -439,10 +536,10 @@ export default function AuthScreen() {
           <View style={[s.logoRing, { borderColor: C.gold, width: 90, height: 90, borderRadius: 45 }]}>
             <ActivityIndicator color={C.gold} size="large" />
           </View>
-          <Text style={[s.formTitle, { color: C.text, textAlign: "center", marginTop: 16 }]}>Creating Your AI Looks</Text>
+          <Text style={[s.formTitle, { color: C.text, textAlign: "center", marginTop: 16 }]}>Replit AI is Working</Text>
           <Text style={[s.formSubtitle, { color: C.textSec, textAlign: "center" }]}>{analysisStatus}</Text>
           <Text style={[s.disclaimer, { color: C.textSec, textAlign: "center", marginTop: 8 }]}>
-            This takes about 30–60 seconds.{"\n"}All 4 looks are being generated at once.
+            Generating all 4 looks simultaneously.{"\n"}This takes about 30–60 seconds.
           </Text>
         </View>
       </View>
@@ -467,9 +564,7 @@ export default function AuthScreen() {
               onPress={() => selectVirtualAvatar(haircut)}
               disabled={loading}
             >
-              {haircut.rank === 1 && (
-                <LinearGradient colors={[C.gold + "18", "transparent"]} style={StyleSheet.absoluteFill} />
-              )}
+              {haircut.rank === 1 && <LinearGradient colors={[C.gold + "18", "transparent"]} style={StyleSheet.absoluteFill} />}
               {haircut.generatedImage ? (
                 <Image source={{ uri: haircut.generatedImage }} style={s.haircutImg} contentFit="cover" />
               ) : (
@@ -486,7 +581,7 @@ export default function AuthScreen() {
                 )}
                 <Text style={[s.haircutName, { color: C.text }]}>{haircut.name || `Style #${haircut.rank}`}</Text>
                 <Text style={[s.haircutDesc, { color: C.textSec }]} numberOfLines={2}>{haircut.description}</Text>
-                <View style={[s.useAvatarBtn, { backgroundColor: C.gold }]}>
+                <View style={[s.useAvatarBtn, { backgroundColor: loading ? C.border : C.gold }]}>
                   {loading ? <ActivityIndicator color={C.bg} size="small" /> : (
                     <Text style={[s.useAvatarText, { color: C.bg }]}>Use as Avatar</Text>
                   )}
@@ -520,7 +615,7 @@ const s = StyleSheet.create({
   primaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 17, borderRadius: 16 },
   primaryBtnText: { fontSize: 16, fontFamily: "DMSans_700Bold" },
   secondaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 16, borderRadius: 16, borderWidth: 1 },
-  secondaryBtnText: { fontSize: 16, fontFamily: "DMSans_700Bold" },
+  secondaryBtnText: { fontSize: 16, fontFamily: "DMSans_500Medium" },
   disclaimer: { fontSize: 12, fontFamily: "DMSans_400Regular", textAlign: "center", paddingTop: 16 },
   formScroll: { paddingHorizontal: 24, gap: 16 },
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.06)", alignItems: "center", justifyContent: "center" },
@@ -533,6 +628,18 @@ const s = StyleSheet.create({
   passwordInput: { flex: 1 },
   eyeBtn: { width: 50, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   switchText: { fontSize: 14, fontFamily: "DMSans_400Regular", textAlign: "center" },
+  // 2FA verify
+  shieldIcon: { alignItems: "center", paddingVertical: 8 },
+  shieldCircle: { width: 80, height: 80, borderRadius: 40, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  codeDisplay: { borderRadius: 18, borderWidth: 1.5, padding: 18, gap: 8, overflow: "hidden", alignItems: "center" },
+  codeDisplayTop: { flexDirection: "row", alignItems: "center", gap: 6 },
+  codeDisplayLabel: { fontSize: 11, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 1 },
+  codeDisplayValue: { fontSize: 40, fontFamily: "DMSans_700Bold", letterSpacing: 12 },
+  codeDisplayNote: { fontSize: 11, fontFamily: "DMSans_400Regular", textAlign: "center", lineHeight: 16 },
+  codeInput: { borderRadius: 14, paddingHorizontal: 16, paddingVertical: 18, fontSize: 28, fontFamily: "DMSans_700Bold", borderWidth: 2, letterSpacing: 8 },
+  securityNote: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: 12, borderWidth: 1 },
+  securityNoteText: { fontSize: 12, fontFamily: "DMSans_400Regular", flex: 1 },
+  // avatar
   optionBtn: { flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderRadius: 18, borderWidth: 1, width: "100%" },
   optionIcon: { width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center" },
   optionInfo: { flex: 1 },
