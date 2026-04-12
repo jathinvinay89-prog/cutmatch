@@ -43,19 +43,6 @@ function getOpenAI(): OpenAI {
   return _openai;
 }
 
-// ── 2-FACTOR REGISTRATION CODES ──────────────────────────────────────────────
-interface PendingReg {
-  username: string; password: string; displayName: string;
-  code: string; expiresAt: Date;
-}
-const pendingRegistrations = new Map<string, PendingReg>();
-// Clean up expired pending registrations every 10 minutes
-setInterval(() => {
-  const now = new Date();
-  for (const [id, reg] of pendingRegistrations.entries()) {
-    if (now > reg.expiresAt) pendingRegistrations.delete(id);
-  }
-}, 10 * 60 * 1000);
 
 function hashPassword(p: string): string {
   return crypto.createHash("sha256").update(p + "cutmatch_salt").digest("hex");
@@ -227,7 +214,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
 
-  // Step 1: Begin registration — validates input, generates verification code
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
       const { username, password, displayName } = req.body;
@@ -236,46 +222,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (clean.length < 3) return res.status(400).json({ error: "Username must be at least 3 characters" });
       if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
 
-      // Check username not already taken
       const [existing] = await db.select().from(users).where(eq(users.username, clean));
       if (existing) return res.status(409).json({ error: "Username already taken" });
 
-      // Generate 6-digit verification code (2FA step)
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const pendingId = crypto.randomUUID();
       const name = (displayName || clean).trim();
-
-      pendingRegistrations.set(pendingId, {
-        username: clean, password: hashPassword(password), displayName: name,
-        code, expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min expiry
-      });
-
-      // In production this code would be emailed/SMS'd.
-      // For this app, we return it so the UI can display it.
-      res.status(200).json({ pendingId, verificationCode: code, requiresVerification: true });
-    } catch (err: any) {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  // Step 2: Verify code — completes registration and creates user account
-  app.post("/api/auth/verify-registration", async (req: Request, res: Response) => {
-    try {
-      const { pendingId, code } = req.body;
-      if (!pendingId || !code) return res.status(400).json({ error: "Verification data required" });
-
-      const pending = pendingRegistrations.get(pendingId);
-      if (!pending) return res.status(400).json({ error: "Verification expired. Please start again." });
-      if (new Date() > pending.expiresAt) {
-        pendingRegistrations.delete(pendingId);
-        return res.status(400).json({ error: "Code expired. Please start again." });
-      }
-      if (pending.code !== code.trim()) return res.status(400).json({ error: "Incorrect code. Try again." });
-
-      // Code is valid — create the user
-      pendingRegistrations.delete(pendingId);
       const [user] = await db.insert(users)
-        .values({ username: pending.username, displayName: pending.displayName, password: pending.password })
+        .values({ username: clean, displayName: name, password: hashPassword(password) })
         .returning();
       const { password: _, ...safeUser } = user;
       res.status(201).json(safeUser);

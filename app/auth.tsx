@@ -27,7 +27,6 @@ type AuthStep =
   | "welcome"
   | "register_creds"
   | "login_creds"
-  | "verify"
   | "avatar_choice"
   | "avatar_standard"
   | "avatar_virtual"
@@ -53,10 +52,6 @@ export default function AuthScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // 2FA verification state
-  const [pendingId, setPendingId] = useState("");
-  const [verificationCode, setVerificationCode] = useState("");
-  const [enteredCode, setEnteredCode] = useState("");
 
   // Avatar state
   const [pendingUser, setPendingUser] = useState<{ id: number } | null>(null);
