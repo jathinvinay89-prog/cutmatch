@@ -91,37 +91,11 @@ export default function AuthScreen() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Registration failed");
 
-      // Server returns pending ID + verification code (2FA)
-      setPendingId(data.pendingId);
-      setVerificationCode(data.verificationCode);
-      setEnteredCode("");
-      setStep("verify");
-    } catch (e: any) {
-      Alert.alert("Error", e.message || "Registration failed");
-    }
-    setLoading(false);
-  };
-
-  // ── STEP 2: Verify 2FA code ─────────────────────────────────────────────────
-  const handleVerify = async () => {
-    if (enteredCode.length !== 6) return Alert.alert("", "Enter the 6-digit code");
-    setLoading(true);
-    try {
-      const url = new URL("/api/auth/verify-registration", apiBase).toString();
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pendingId, code: enteredCode }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Verification failed");
-
-      // User created — set in context and proceed to avatar
       setCurrentUser(data);
       setPendingUser({ id: data.id });
       setStep("avatar_choice");
     } catch (e: any) {
-      Alert.alert("Verification Failed", e.message || "Code incorrect");
+      Alert.alert("Error", e.message || "Registration failed");
     }
     setLoading(false);
   };
@@ -291,72 +265,6 @@ export default function AuthScreen() {
 
           <Pressable onPress={() => setStep("login_creds")}>
             <Text style={[s.switchText, { color: C.textSec }]}>Already have an account? <Text style={{ color: C.gold }}>Sign In</Text></Text>
-          </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    );
-  }
-
-  // ── 2FA VERIFICATION ──────────────────────────────────────────────────────
-  if (step === "verify") {
-    return (
-      <KeyboardAvoidingView style={[s.container, { backgroundColor: C.bg }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <LinearGradient colors={["#141414", "#0A0A0A"]} style={StyleSheet.absoluteFill} />
-        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]} keyboardShouldPersistTaps="handled">
-          <Pressable style={s.backBtn} onPress={() => setStep("register_creds")}>
-            <Ionicons name="chevron-back" size={22} color={C.text} />
-          </Pressable>
-
-          <View style={s.shieldIcon}>
-            <View style={[s.shieldCircle, { borderColor: C.gold, backgroundColor: C.gold + "12" }]}>
-              <Ionicons name="shield-checkmark" size={38} color={C.gold} />
-            </View>
-          </View>
-
-          <Text style={[s.formTitle, { color: C.text }]}>2-Step Verification</Text>
-          <Text style={[s.formSubtitle, { color: C.textSec }]}>
-            To protect your account, enter the 6-digit code below to complete your registration.
-          </Text>
-
-          <View style={[s.codeDisplay, { backgroundColor: C.surface, borderColor: C.gold + "50" }]}>
-            <LinearGradient colors={[C.gold + "15", "transparent"]} style={StyleSheet.absoluteFill} />
-            <View style={s.codeDisplayTop}>
-              <Ionicons name="key-outline" size={14} color={C.gold} />
-              <Text style={[s.codeDisplayLabel, { color: C.gold }]}>Your Verification Code</Text>
-            </View>
-            <Text style={[s.codeDisplayValue, { color: C.text }]}>{verificationCode}</Text>
-            <Text style={[s.codeDisplayNote, { color: C.textSec }]}>
-              In production this would be sent via email or SMS.{"\n"}Enter this code below to verify your identity.
-            </Text>
-          </View>
-
-          <View style={s.inputGroup}>
-            <Text style={[s.inputLabel, { color: C.textSec }]}>Verification Code</Text>
-            <TextInput
-              style={[s.codeInput, { backgroundColor: C.surface2, borderColor: enteredCode.length === 6 ? C.gold : C.border, color: C.text }]}
-              placeholder="Enter 6-digit code"
-              placeholderTextColor={C.textSec}
-              value={enteredCode}
-              onChangeText={(t) => setEnteredCode(t.replace(/\D/g, "").slice(0, 6))}
-              keyboardType="number-pad"
-              maxLength={6}
-              textAlign="center"
-            />
-          </View>
-
-          <View style={[s.securityNote, { backgroundColor: C.surface, borderColor: C.border }]}>
-            <Ionicons name="information-circle-outline" size={15} color={C.textSec} />
-            <Text style={[s.securityNoteText, { color: C.textSec }]}>This code expires in 10 minutes for security.</Text>
-          </View>
-
-          <Pressable
-            style={[s.primaryBtn, { backgroundColor: enteredCode.length === 6 ? C.gold : C.border, marginTop: 8, opacity: loading ? 0.7 : 1 }]}
-            onPress={handleVerify}
-            disabled={loading || enteredCode.length !== 6}
-          >
-            {loading ? <ActivityIndicator color={C.bg} /> : (
-              <><Ionicons name="shield-checkmark" size={18} color={C.bg} /><Text style={[s.primaryBtnText, { color: C.bg }]}>Verify & Create Account</Text></>
-            )}
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -623,17 +531,6 @@ const s = StyleSheet.create({
   passwordInput: { flex: 1 },
   eyeBtn: { width: 50, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   switchText: { fontSize: 14, fontFamily: "DMSans_400Regular", textAlign: "center" },
-  // 2FA verify
-  shieldIcon: { alignItems: "center", paddingVertical: 8 },
-  shieldCircle: { width: 80, height: 80, borderRadius: 40, borderWidth: 2, alignItems: "center", justifyContent: "center" },
-  codeDisplay: { borderRadius: 18, borderWidth: 1.5, padding: 18, gap: 8, overflow: "hidden", alignItems: "center" },
-  codeDisplayTop: { flexDirection: "row", alignItems: "center", gap: 6 },
-  codeDisplayLabel: { fontSize: 11, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 1 },
-  codeDisplayValue: { fontSize: 40, fontFamily: "DMSans_700Bold", letterSpacing: 12 },
-  codeDisplayNote: { fontSize: 11, fontFamily: "DMSans_400Regular", textAlign: "center", lineHeight: 16 },
-  codeInput: { borderRadius: 14, paddingHorizontal: 16, paddingVertical: 18, fontSize: 28, fontFamily: "DMSans_700Bold", borderWidth: 2, letterSpacing: 8 },
-  securityNote: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: 12, borderWidth: 1 },
-  securityNoteText: { fontSize: 12, fontFamily: "DMSans_400Regular", flex: 1 },
   // avatar
   optionBtn: { flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderRadius: 18, borderWidth: 1, width: "100%" },
   optionIcon: { width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center" },
