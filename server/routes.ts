@@ -30,17 +30,16 @@ function saveImageFile(base64Data: string, ext = "png"): string {
   return `${getServerBase()}/uploads/${filename}`;
 }
 
-// ── REPLIT AI (via OpenAI-compatible integration) ────────────────────────────
-// Uses Replit's managed AI credentials from the built-in AI integration.
-// Models: gpt-5.1 for chat/analysis, gpt-image-1 for image generation.
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || undefined;
-    _openai = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+// ── GROQ AI (free, ultra-fast inference) ─────────────────────────────────────
+// Uses Groq's free API with llama-4-scout for vision-based face analysis.
+let _groq: OpenAI | null = null;
+function getGroq(): OpenAI {
+  if (!_groq) {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) throw new Error("Missing credentials. Please provide GROQ_API_KEY.");
+    _groq = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
   }
-  return _openai;
+  return _groq;
 }
 
 
@@ -69,24 +68,25 @@ interface FaceAnalysis {
 }
 
 async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
-  const response = await getOpenAI().chat.completions.create({
-    model: "gpt-5.1",
+  const imageUrl = imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
+  const response = await getGroq().chat.completions.create({
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
     messages: [
       {
         role: "system",
         content: `You are a professional hair stylist. Analyze the face and return ONLY valid JSON (no markdown, no code blocks):
-{"faceShape":"oval|round|square|heart|oblong|diamond","faceFeatures":"brief 1-2 sentence","hasGlasses":false,"hairColor":"color","skinTone":"fair|light|medium|olive|tan|dark brown|deep","gender":"man|woman|person","ageRange":"teens|20s|30s|40s|50s+","recommendations":[{"rank":1,"name":"Name","description":"1 sentence","whyItFits":"1-2 sentences","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle: lengths, fade, texture, styling"}]}
+{"faceShape":"oval|round|square|heart|oblong|diamond","faceFeatures":"brief 1-2 sentence","hasGlasses":false,"hairColor":"color","skinTone":"fair|light|medium|olive|tan|dark brown|deep","gender":"man|woman|person","ageRange":"teens|20s|30s|40s|50s+","recommendations":[{"rank":1,"name":"Name","description":"1 sentence","whyItFits":"1-2 sentences","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle prompt for image generation"}]}
 Include exactly 4 recommendations. Be concise and fast.`,
       },
       {
         role: "user",
         content: [
-          { type: "image_url", image_url: { url: imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}` } },
+          { type: "image_url", image_url: { url: imageUrl } },
           { type: "text", text: "Analyze and give 4 best haircuts. Return only JSON." },
-        ],
+        ] as any,
       },
     ],
-    max_completion_tokens: 1200,
+    max_tokens: 1200,
   });
 
   const content = response.choices[0]?.message?.content || "{}";
@@ -98,26 +98,14 @@ Include exactly 4 recommendations. Be concise and fast.`,
 async function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
   try {
     const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-    const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background. High quality.`;
+    const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
+    const encoded = encodeURIComponent(prompt.slice(0, 500));
+    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=flux`;
 
-    // Use Replit's built-in gpt-image-1 model — returns base64 JSON
-    const response = await getOpenAI().images.generate({
-      model: "gpt-image-1",
-      prompt: prompt.slice(0, 999),
-      n: 1,
-    } as any);
-
-    const b64 = (response.data[0] as any)?.b64_json;
-    if (b64) return saveImageFile(b64, "png");
-
-    // Fallback: if URL is returned instead
-    const url = (response.data[0] as any)?.url;
-    if (url) {
-      const imgRes = await fetch(url);
-      const buf = await imgRes.arrayBuffer();
-      return saveImageFile(Buffer.from(buf).toString("base64"), "png");
-    }
-    return null;
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) return null;
+    const buf = await imgRes.arrayBuffer();
+    return saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
   } catch (err: any) {
     console.error(`Image gen failed for ${rec.name}:`, err?.message);
     return null;
