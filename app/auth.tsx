@@ -250,7 +250,7 @@ export default function AuthScreen() {
     return (
       <KeyboardAvoidingView style={[s.container, { backgroundColor: C.bg }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <LinearGradient colors={["#141414", "#0A0A0A"]} style={StyleSheet.absoluteFill} />
-        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]}>
+        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]} keyboardShouldPersistTaps="handled">
           <Pressable style={s.backBtn} onPress={() => setStep("welcome")}>
             <Ionicons name="chevron-back" size={22} color={C.text} />
           </Pressable>
@@ -307,7 +307,7 @@ export default function AuthScreen() {
     return (
       <KeyboardAvoidingView style={[s.container, { backgroundColor: C.bg }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <LinearGradient colors={["#141414", "#0A0A0A"]} style={StyleSheet.absoluteFill} />
-        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]}>
+        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]} keyboardShouldPersistTaps="handled">
           <Pressable style={s.backBtn} onPress={() => setStep("register_creds")}>
             <Ionicons name="chevron-back" size={22} color={C.text} />
           </Pressable>
@@ -373,7 +373,7 @@ export default function AuthScreen() {
     return (
       <KeyboardAvoidingView style={[s.container, { backgroundColor: C.bg }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <LinearGradient colors={["#141414", "#0A0A0A"]} style={StyleSheet.absoluteFill} />
-        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]}>
+        <ScrollView contentContainerStyle={[s.formScroll, { paddingTop: topPad + 20, paddingBottom: bottomPad + 40 }]} keyboardShouldPersistTaps="handled">
           <Pressable style={s.backBtn} onPress={() => setStep("welcome")}>
             <Ionicons name="chevron-back" size={22} color={C.text} />
           </Pressable>
