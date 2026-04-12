@@ -95,21 +95,12 @@ Include exactly 4 recommendations. Be concise and fast.`,
   return JSON.parse(match[0]);
 }
 
-async function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
-  try {
-    const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-    const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
-    const encoded = encodeURIComponent(prompt.slice(0, 500));
-    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=flux`;
-
-    const imgRes = await fetch(imageUrl);
-    if (!imgRes.ok) return null;
-    const buf = await imgRes.arrayBuffer();
-    return saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
-  } catch (err: any) {
-    console.error(`Image gen failed for ${rec.name}:`, err?.message);
-    return null;
-  }
+function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): string {
+  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
+  const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
+  const encoded = encodeURIComponent(prompt.slice(0, 500));
+  const seed = Math.floor(Math.random() * 999999);
+  return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}`;
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -181,13 +172,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
       const analysis = await analyzeFace(imageUrl);
 
-      // Generate all images in parallel
-      const recsWithImages = await Promise.all(
-        analysis.recommendations.map(async (rec) => {
-          const imgUrl = await generateHaircutImage(analysis, rec);
-          return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: imgUrl };
-        })
-      );
+      const recsWithImages = analysis.recommendations.map((rec) => {
+        const imgUrl = generateHaircutImage(analysis, rec);
+        return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: imgUrl };
+      });
 
       res.json({
         faceShape: analysis.faceShape,
@@ -273,15 +261,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })),
       });
 
-      send("status", { message: "Generating all 4 AI looks in parallel..." });
+      send("status", { message: "Generating your AI looks..." });
 
-      // Generate all images in PARALLEL for speed
-      await Promise.all(
-        analysis.recommendations.map(async (rec) => {
-          const imageUrl = await generateHaircutImage(analysis, rec);
-          send("image", { rank: rec.rank, generatedImage: imageUrl });
-        })
-      );
+      for (const rec of analysis.recommendations) {
+        const imageUrl = generateHaircutImage(analysis, rec);
+        send("image", { rank: rec.rank, generatedImage: imageUrl });
+      }
 
       send("done", {});
       res.end();
