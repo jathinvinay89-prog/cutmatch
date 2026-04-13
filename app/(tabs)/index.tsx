@@ -152,26 +152,30 @@ export default function CutMatchScreen() {
         Alert.alert("Camera Access Needed", "Allow camera access in settings.");
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ["images"], allowsEditing: true, aspect: [3, 4], quality: 0.8, base64: true,
-      });
-      if (!result.canceled && result.assets[0]) {
-        setSelectedImage(result.assets[0].uri);
-        setSelectedBase64(result.assets[0].base64 ?? null);
-      }
-    } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Photo Access Needed", "Allow photo library access in settings.");
+      try {
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"], allowsEditing: true, aspect: [3, 4], quality: 0.8, base64: true,
+        });
+        if (!result.canceled && result.assets[0]) {
+          setSelectedImage(result.assets[0].uri);
+          setSelectedBase64(result.assets[0].base64 ?? null);
+        }
         return;
+      } catch {
+        // Camera unavailable (e.g. simulator) — fall through to gallery
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"], allowsEditing: true, aspect: [3, 4], quality: 0.8, base64: true,
-      });
-      if (!result.canceled && result.assets[0]) {
-        setSelectedImage(result.assets[0].uri);
-        setSelectedBase64(result.assets[0].base64 ?? null);
-      }
+    }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Photo Access Needed", "Allow photo library access in settings.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"], allowsEditing: true, aspect: [3, 4], quality: 0.8, base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setSelectedImage(result.assets[0].uri);
+      setSelectedBase64(result.assets[0].base64 ?? null);
     }
   };
 

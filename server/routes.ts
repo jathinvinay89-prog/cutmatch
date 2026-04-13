@@ -73,32 +73,110 @@ interface FaceAnalysis {
   recommendations: HaircutRec[];
 }
 
+function repairTruncatedJson(raw: string): FaceAnalysis | null {
+  // Try trimming after last complete recommendation object and close array+object
+  const lastClose = raw.lastIndexOf("},");
+  if (lastClose !== -1) {
+    const candidate = raw.slice(0, lastClose + 1) + "]}";
+    try { return JSON.parse(candidate); } catch {}
+  }
+  // Try the same without trailing comma (last object may be the final one)
+  const lastBrace = raw.lastIndexOf("}");
+  if (lastBrace !== -1) {
+    // Build candidates: close array, close root object
+    for (const suffix of ["]}}", "]}"] ) {
+      const candidate = raw.slice(0, lastBrace + 1) + suffix;
+      try { return JSON.parse(candidate); } catch {}
+    }
+  }
+  return null;
+}
+
+function validateAnalysis(analysis: FaceAnalysis): void {
+  if (!analysis.faceShape) throw new Error("Missing faceShape in AI response");
+  if (!Array.isArray(analysis.recommendations) || analysis.recommendations.length !== 4) {
+    throw new Error(`Expected exactly 4 recommendations, got ${analysis.recommendations?.length ?? 0}`);
+  }
+  for (const rec of analysis.recommendations) {
+    if (!rec.rank || !rec.name || !rec.imagePrompt) {
+      throw new Error("Incomplete recommendation fields in AI response");
+    }
+  }
+}
+
+function extractJson(content: string): FaceAnalysis {
+  const cleaned = content
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .trim();
+
+  // Extract the outermost JSON object — greedy match to capture full content
+  const match = cleaned.match(/\{[\s\S]*/);
+  if (!match) throw new Error("No JSON object found in AI response");
+
+  let raw = match[0];
+  // Ensure it ends at the last closing brace (greedy match may include trailing text)
+  const lastBrace = raw.lastIndexOf("}");
+  if (lastBrace !== -1) raw = raw.slice(0, lastBrace + 1);
+
+  // First try: parse as-is
+  try {
+    const result = JSON.parse(raw);
+    validateAnalysis(result);
+    return result;
+  } catch {}
+
+  // Second try: repair truncated JSON
+  const repaired = repairTruncatedJson(raw);
+  if (repaired) {
+    try {
+      validateAnalysis(repaired);
+      return repaired;
+    } catch {}
+  }
+
+  throw new Error("Could not parse or repair AI response JSON");
+}
+
 async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
   const imageUrl = imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
-  const response = await getGroq().chat.completions.create({
+
+  const systemPrompt = `You are a professional hair stylist. Analyze the face in the image and return ONLY valid JSON with no markdown, no code blocks, and no extra text. Use this exact structure:
+{"faceShape":"oval|round|square|heart|oblong|diamond","faceFeatures":"brief 1-2 sentence description","hasGlasses":false,"hairColor":"color description","skinTone":"fair|light|medium|olive|tan|dark brown|deep","gender":"man|woman|person","ageRange":"teens|20s|30s|40s|50s+","recommendations":[{"rank":1,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description for image generation"},{"rank":2,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"},{"rank":3,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"},{"rank":4,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"}]}
+Return exactly 4 recommendations. Output ONLY the JSON object.`;
+
+  const makeRequest = () => getGroq().chat.completions.create({
     model: "meta-llama/llama-4-scout-17b-16e-instruct",
     messages: [
-      {
-        role: "system",
-        content: `You are a professional hair stylist. Analyze the face and return ONLY valid JSON (no markdown, no code blocks):
-{"faceShape":"oval|round|square|heart|oblong|diamond","faceFeatures":"brief 1-2 sentence","hasGlasses":false,"hairColor":"color","skinTone":"fair|light|medium|olive|tan|dark brown|deep","gender":"man|woman|person","ageRange":"teens|20s|30s|40s|50s+","recommendations":[{"rank":1,"name":"Name","description":"1 sentence","whyItFits":"1-2 sentences","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle prompt for image generation"}]}
-Include exactly 4 recommendations. Be concise and fast.`,
-      },
+      { role: "system", content: systemPrompt },
       {
         role: "user",
         content: [
           { type: "image_url", image_url: { url: imageUrl } },
-          { type: "text", text: "Analyze and give 4 best haircuts. Return only JSON." },
+          { type: "text", text: "Analyze this face and return the JSON with exactly 4 haircut recommendations." },
         ] as any,
       },
     ],
-    max_tokens: 1200,
+    max_tokens: 2000,
   });
 
-  const content = response.choices[0]?.message?.content || "{}";
-  const match = content.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Invalid AI response format");
-  return JSON.parse(match[0]);
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await makeRequest();
+      const content = response.choices[0]?.message?.content || "";
+      if (!content) throw new Error("Empty AI response");
+      const analysis = extractJson(content);
+      if (!analysis.recommendations || analysis.recommendations.length === 0) {
+        throw new Error("No recommendations in AI response");
+      }
+      return analysis;
+    } catch (err: any) {
+      lastError = err;
+      console.error(`analyzeFace attempt ${attempt + 1} failed:`, err.message);
+    }
+  }
+  throw lastError || new Error("Analysis failed after retries");
 }
 
 function buildImagePrompt(analysis: FaceAnalysis, rec: HaircutRec): string {

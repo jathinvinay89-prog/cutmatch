@@ -116,12 +116,21 @@ export default function AuthScreen() {
 
   const pickAndUploadPhoto = async (source: "camera" | "gallery") => {
     let result;
-    if (source === "camera") {
+    if (source === "camera" && Platform.OS !== "web") {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== "granted") return Alert.alert("Camera permission needed");
-      result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
-      });
+      try {
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
+        });
+      } catch {
+        // Camera unavailable (simulator/restricted) — fall back to gallery
+        const libStatus = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (libStatus.status !== "granted") return Alert.alert("Photo library permission needed");
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
+        });
+      }
     } else {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") return Alert.alert("Photo library permission needed");
@@ -141,13 +150,31 @@ export default function AuthScreen() {
   };
 
   const takeVirtualSelfie = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") return Alert.alert("Camera permission needed");
+    let result;
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
-    });
-    if (result.canceled || !result.assets[0]) return;
+    if (Platform.OS !== "web") {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status === "granted") {
+        try {
+          result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
+          });
+        } catch {
+          // Camera hardware unavailable (e.g. simulator) — fall back to gallery
+          result = undefined;
+        }
+      }
+    }
+
+    if (!result) {
+      const libStatus = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (libStatus.status !== "granted") return Alert.alert("Permission needed", "Allow photo access to continue.");
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
+      });
+    }
+
+    if (!result || result.canceled || !result.assets[0]) return;
     const b64 = result.assets[0].base64;
     if (!b64) { Alert.alert("Error", "Could not read photo. Try again."); return; }
 
