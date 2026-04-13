@@ -95,12 +95,30 @@ Include exactly 4 recommendations. Be concise and fast.`,
   return JSON.parse(match[0]);
 }
 
-function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): string {
-  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-  const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
-  const encoded = encodeURIComponent(prompt.slice(0, 500));
-  const seed = Math.floor(Math.random() * 999999);
-  return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}`;
+async function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
+  try {
+    const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
+    const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
+    const encoded = encodeURIComponent(prompt.slice(0, 500));
+    const seed = Math.floor(Math.random() * 999999);
+    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
+
+    const imgRes = await fetch(imageUrl, {
+      headers: {
+        "User-Agent": "CutMatch/1.0",
+        "Referer": "https://cutmatch.app",
+      },
+    });
+    if (!imgRes.ok) {
+      console.error(`Pollinations returned ${imgRes.status} for rank ${rec.rank}`);
+      return null;
+    }
+    const buf = await imgRes.arrayBuffer();
+    return saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
+  } catch (err: any) {
+    console.error(`Image gen failed for ${rec.name}:`, err?.message);
+    return null;
+  }
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -172,10 +190,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = analysis.recommendations.map((rec) => {
-        const imgUrl = generateHaircutImage(analysis, rec);
-        return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: imgUrl };
-      });
+      const recsWithImages = await Promise.all(
+        analysis.recommendations.map(async (rec) => {
+          const imgUrl = await generateHaircutImage(analysis, rec);
+          return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: imgUrl };
+        })
+      );
 
       res.json({
         faceShape: analysis.faceShape,
@@ -263,10 +283,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       send("status", { message: "Generating your AI looks..." });
 
-      for (const rec of analysis.recommendations) {
-        const imageUrl = generateHaircutImage(analysis, rec);
-        send("image", { rank: rec.rank, generatedImage: imageUrl });
-      }
+      await Promise.all(
+        analysis.recommendations.map(async (rec) => {
+          const imageUrl = await generateHaircutImage(analysis, rec);
+          send("image", { rank: rec.rank, generatedImage: imageUrl });
+        })
+      );
 
       send("done", {});
       res.end();
