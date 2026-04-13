@@ -12,11 +12,13 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { Image } from "expo-image";
 import { useApp } from "@/context/AppContext";
 import { router, useLocalSearchParams } from "expo-router";
 import { fetch } from "expo/fetch";
 import { LinearGradient } from "expo-linear-gradient";
+import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW } from "@/lib/liquidGlass";
 
 export default function CompetitionScreen() {
   const insets = useSafeAreaInsets();
@@ -181,9 +183,14 @@ export default function CompetitionScreen() {
   const challRec = getTopRec(challengerPost);
   const challeRec = getTopRec(challengeePost);
 
+  const isDark = C.background === "#0A0A0A";
+
   return (
     <View style={[styles.container, { backgroundColor: C.background }]}>
-      <View style={[styles.header, { paddingTop: topPad + 12, borderBottomColor: C.border }]}>
+      <View style={[styles.header, isLiquidGlass
+        ? { paddingTop: topPad + 12, borderBottomColor: "transparent", backgroundColor: "transparent", overflow: "hidden" }
+        : { paddingTop: topPad + 12, borderBottomColor: C.border }]}>
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <Pressable style={[styles.backBtn, { backgroundColor: C.surface, borderColor: C.border }]} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={22} color={C.text} />
         </Pressable>

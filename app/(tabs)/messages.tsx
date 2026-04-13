@@ -12,10 +12,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { useApp } from "@/context/AppContext";
 import { router } from "expo-router";
 import { fetch } from "expo/fetch";
 import { Image } from "expo-image";
+import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW } from "@/lib/liquidGlass";
 
 interface Friend {
   id: number;
@@ -157,9 +159,14 @@ export default function MessagesScreen() {
 
   const todayLabel = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+  const isDark = C.background === "#0A0A0A";
+
   return (
     <View style={[styles.container, { backgroundColor: C.background }]}>
-      <View style={[styles.header, { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+      <View style={[styles.header, isLiquidGlass
+        ? { paddingTop: topPad + 10, borderBottomColor: "transparent", backgroundColor: "transparent", overflow: "hidden" }
+        : { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <View style={styles.headerRow}>
           <Text style={[styles.headerTitle, { color: C.text }]}>Messages</Text>
           {requests.length > 0 && (

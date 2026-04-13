@@ -17,12 +17,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
+import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import { Ionicons, Feather } from "@expo/vector-icons";
 import { useApp } from "@/context/AppContext";
 import { getApiUrl } from "@/lib/query-client";
 import { fetch } from "expo/fetch";
 import { router, useLocalSearchParams } from "expo-router";
+import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW, LG_SURFACE_BG_DARK, LG_SURFACE_BG_LIGHT } from "@/lib/liquidGlass";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const TAB_BAR_HEIGHT = Platform.OS === "ios" ? 49 : Platform.OS === "android" ? 56 : 84;
@@ -442,7 +444,10 @@ export default function CutMatchScreen() {
               )}
             </View>
 
-            <View style={[styles.pills, { backgroundColor: C.surface, borderColor: C.border }]}>
+            <View style={[styles.pills, isLiquidGlass
+              ? { backgroundColor: C.background === "#0A0A0A" ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+              : { backgroundColor: C.surface, borderColor: C.border }]}>
+              {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={C.background === "#0A0A0A" ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
               {[
                 { icon: "scan-outline" as const, label: "Face Shape" },
                 { icon: "sparkles-outline" as const, label: "4 Cuts" },
@@ -515,7 +520,10 @@ export default function CutMatchScreen() {
           scrollEventThrottle={16}
         >
           {analysis?.faceFeatures ? (
-            <View style={[styles.featureCard, { backgroundColor: C.surface, borderColor: C.border }]}>
+            <View style={[styles.featureCard, isLiquidGlass
+              ? { backgroundColor: C.background === "#0A0A0A" ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+              : { backgroundColor: C.surface, borderColor: C.border }]}>
+              {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={C.background === "#0A0A0A" ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
               <View style={styles.featureRow}>
                 <Ionicons name="scan" size={14} color={C.gold} />
                 <Text style={[styles.featureLabel, { color: C.textSecondary }]}>FACE ANALYSIS</Text>
@@ -539,7 +547,10 @@ export default function CutMatchScreen() {
               </View>
             </View>
           ) : (
-            <View style={[styles.featureCardLoading, { backgroundColor: C.surface, borderColor: C.border }]}>
+            <View style={[styles.featureCardLoading, isLiquidGlass
+              ? { backgroundColor: C.background === "#0A0A0A" ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+              : { backgroundColor: C.surface, borderColor: C.border }]}>
+              {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={C.background === "#0A0A0A" ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
               <Text style={[styles.featureLoadingText, { color: C.textSecondary }]}>Analyzing your face...</Text>
             </View>
           )}
@@ -641,6 +652,8 @@ export default function CutMatchScreen() {
 function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index: number; colors: any; showDifficulty: boolean }) {
   const slideAnim = useRef(new Animated.Value(50)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  const isDark = C.background === "#0A0A0A";
+  const glassBg = isDark ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT;
 
   React.useEffect(() => {
     Animated.parallel([
@@ -655,7 +668,11 @@ function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index
 
   if (!rec.rank) {
     return (
-      <Animated.View style={[styles.cardSkeleton, { backgroundColor: C.surface, borderColor: C.border, opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
+      <Animated.View style={[styles.cardSkeleton, isLiquidGlass
+        ? { backgroundColor: glassBg, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+        : { backgroundColor: C.surface, borderColor: C.border },
+        { opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <View style={[styles.skeletonImg, { backgroundColor: C.surface2 }]} />
         <View style={styles.skeletonLines}>
           <View style={[styles.skeletonLine, { backgroundColor: C.surface2, width: "60%" }]} />
@@ -667,7 +684,11 @@ function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index
   }
 
   return (
-    <Animated.View style={[styles.card, { backgroundColor: C.surface, borderColor: rec.rank === 1 ? C.gold + "40" : C.border }, { opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
+    <Animated.View style={[styles.card, isLiquidGlass
+      ? { backgroundColor: glassBg, borderColor: rec.rank === 1 ? C.gold + "40" : LG_BORDER_GLOW, overflow: "hidden" }
+      : { backgroundColor: C.surface, borderColor: rec.rank === 1 ? C.gold + "40" : C.border },
+      { opacity: opacityAnim, transform: [{ translateY: slideAnim }] }]}>
+      {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
       {rec.rank === 1 && (
         <LinearGradient colors={[C.gold + "20", "transparent"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
       )}

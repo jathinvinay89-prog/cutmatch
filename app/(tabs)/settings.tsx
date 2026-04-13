@@ -11,9 +11,11 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { useApp } from "@/context/AppContext";
 import { Image } from "expo-image";
 import { router } from "expo-router";
+import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW, LG_SURFACE_BG_DARK, LG_SURFACE_BG_LIGHT } from "@/lib/liquidGlass";
 
 function AvatarCircle({ name, size = 56, avatarUrl }: { name: string; size?: number; avatarUrl?: string | null }) {
   const initials = name.slice(0, 2).toUpperCase();
@@ -71,6 +73,16 @@ function SettingRow({
 }
 
 function SectionCard({ children, colors: C }: { children: React.ReactNode; colors: any }) {
+  const isDark = C.background === "#0A0A0A";
+  if (isLiquidGlass) {
+    const glassBg = isDark ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT;
+    return (
+      <View style={[s.settingsCard, { backgroundColor: glassBg, borderColor: LG_BORDER_GLOW, overflow: "hidden" }]}>
+        <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
+        {children}
+      </View>
+    );
+  }
   return (
     <View style={[s.settingsCard, { backgroundColor: C.surface, borderColor: C.border }]}>
       {children}
@@ -117,9 +129,14 @@ export default function SettingsScreen() {
 
   const hairLengths: Array<"Short" | "Medium" | "Long"> = ["Short", "Medium", "Long"];
 
+  const isDark = C.background === "#0A0A0A";
+
   return (
     <View style={[s.container, { backgroundColor: C.background }]}>
-      <View style={[s.header, { paddingTop: topPad + 12, borderBottomColor: C.border }]}>
+      <View style={[s.header, isLiquidGlass
+        ? { paddingTop: topPad + 12, borderBottomColor: "transparent", backgroundColor: "transparent", overflow: "hidden" }
+        : { paddingTop: topPad + 12, borderBottomColor: C.border }]}>
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <Text style={[s.headerTitle, { color: C.text }]}>Settings</Text>
       </View>
 
@@ -128,7 +145,10 @@ export default function SettingsScreen() {
         contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + bottomPad + 20, paddingTop: 16 }}
       >
         {currentUser && (
-          <View style={[s.profileCard, { backgroundColor: C.surface, borderColor: C.border }]}>
+          <View style={[s.profileCard, isLiquidGlass
+            ? { backgroundColor: isDark ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+            : { backgroundColor: C.surface, borderColor: C.border }]}>
+            {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
             <AvatarCircle name={currentUser.displayName} size={54} avatarUrl={currentUser.avatarUrl} />
             <View style={s.profileInfo}>
               <Text style={[s.profileName, { color: C.text }]}>{currentUser.displayName}</Text>

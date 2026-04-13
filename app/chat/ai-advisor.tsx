@@ -12,12 +12,14 @@ import {
 import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { useApp } from "@/context/AppContext";
 import type { AIAdvisorMessage } from "@/context/AppContext";
 import { router } from "expo-router";
 import { fetch } from "expo/fetch";
 import * as Haptics from "expo-haptics";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW } from "@/lib/liquidGlass";
 
 const INTRO_MESSAGE: AIAdvisorMessage = {
   id: "intro",
@@ -157,9 +159,14 @@ export default function AIAdvisorScreen() {
     }
   };
 
+  const isDark = C.background === "#0A0A0A";
+
   return (
     <View style={[styles.container, { backgroundColor: C.background }]}>
-      <View style={[styles.header, { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+      <View style={[styles.header, isLiquidGlass
+        ? { paddingTop: topPad + 10, borderBottomColor: "transparent", backgroundColor: "transparent", overflow: "hidden" }
+        : { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <Pressable style={[styles.backBtn, { borderColor: C.border }]} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={22} color={C.text} />
         </Pressable>

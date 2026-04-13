@@ -17,9 +17,11 @@ import { Image } from "expo-image";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { BlurView } from "expo-blur";
 import { useApp } from "@/context/AppContext";
 import { router } from "expo-router";
 import { fetch } from "expo/fetch";
+import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW, LG_SURFACE_BG_DARK, LG_SURFACE_BG_LIGHT } from "@/lib/liquidGlass";
 
 const Haptics = Platform.OS !== "web" ? require("expo-haptics") : null;
 const TAB_BAR_HEIGHT = Platform.OS === "ios" ? 49 : Platform.OS === "android" ? 56 : 84;
@@ -268,12 +270,17 @@ function CompetitionBanner({ item, colors: C }: { item: any; colors: any }) {
   const totalVotes = (comp.challengerVotes ?? 0) + (comp.challengeeVotes ?? 0);
   const cPct = totalVotes > 0 ? Math.round(((comp.challengerVotes ?? 0) / totalVotes) * 100) : 50;
   const ePct = 100 - cPct;
+  const isDark = C.background === "#0A0A0A";
+  const glassBg = isDark ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT;
 
   return (
     <Pressable
-      style={[bS.banner, { backgroundColor: C.surface, borderColor: isLive ? C.gold + "70" : C.border }]}
+      style={[bS.banner, isLiquidGlass
+        ? { backgroundColor: glassBg, borderColor: isLive ? C.gold + "70" : LG_BORDER_GLOW, overflow: "hidden" }
+        : { backgroundColor: C.surface, borderColor: isLive ? C.gold + "70" : C.border }]}
       onPress={() => router.push({ pathname: "/competition/[id]", params: { id: String(comp.id) } } as any)}
     >
+      {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
       <LinearGradient colors={isLive ? [C.gold + "22", "transparent"] : ["transparent", "transparent"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} />
 
       <View style={bS.bannerTop}>
@@ -338,14 +345,19 @@ function PostCard({ item, currentUserId, apiBase, colors: C, compact, showCaptio
   const [modalVisible, setModalVisible] = useState(false);
   const recs = item.post.recommendations || [];
   const totalRatings = recs.reduce((s: number, r: any) => s + (r.votesCount ?? 0), 0);
+  const isDark = C.background === "#0A0A0A";
+  const glassBg = isDark ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT;
 
   if (compact) {
     return (
       <>
         <Pressable
-          style={[fS.postCardCompact, { backgroundColor: C.surface, borderColor: C.border }]}
+          style={[fS.postCardCompact, isLiquidGlass
+            ? { backgroundColor: glassBg, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+            : { backgroundColor: C.surface, borderColor: C.border }]}
           onPress={() => setModalVisible(true)}
         >
+          {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
           <AvatarCircle name={item.user.displayName} size={34} avatarUrl={item.user.avatarUrl} />
           <View style={{ flex: 1, gap: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -371,9 +383,12 @@ function PostCard({ item, currentUserId, apiBase, colors: C, compact, showCaptio
   return (
     <>
       <Pressable
-        style={[fS.postCard, { backgroundColor: C.surface, borderColor: C.border }]}
+        style={[fS.postCard, isLiquidGlass
+          ? { backgroundColor: glassBg, borderColor: LG_BORDER_GLOW, overflow: "hidden" }
+          : { backgroundColor: C.surface, borderColor: C.border }]}
         onPress={() => setModalVisible(true)}
       >
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <View style={fS.postHeader}>
           <AvatarCircle name={item.user.displayName} size={36} avatarUrl={item.user.avatarUrl} />
           <View style={fS.postUserInfo}>
@@ -515,9 +530,14 @@ export default function FeedScreen() {
     });
   }, [posts, competitions, filter]);
 
+  const isDark = C.background === "#0A0A0A";
+
   return (
     <View style={[fS.container, { backgroundColor: C.background }]}>
-      <View style={[fS.header, { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+      <View style={[fS.header, isLiquidGlass
+        ? { paddingTop: topPad + 10, borderBottomColor: "transparent", backgroundColor: "transparent", overflow: "hidden" }
+        : { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+        {isLiquidGlass && <BlurView intensity={LG_BLUR_INTENSITY} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />}
         <View style={fS.headerRow}>
           <Text style={[fS.headerTitle, { color: C.text }]}>Feed</Text>
         </View>
