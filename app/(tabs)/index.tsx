@@ -146,7 +146,7 @@ export default function CutMatchScreen() {
 
   const pickImage = async (source: "camera" | "gallery") => {
     triggerHaptic("light");
-    if (source === "camera") {
+    if (source === "camera" && Platform.OS !== "web") {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Camera Access Needed", "Allow camera access in settings.");
@@ -419,21 +419,23 @@ export default function CutMatchScreen() {
                   onPressIn={cameraSpring.onPressIn}
                   onPressOut={cameraSpring.onPressOut}
                 >
-                  <Ionicons name="camera" size={20} color={C.gold} />
-                  <Text style={[styles.srcBtnText, { color: C.gold }]}>Camera</Text>
+                  <Ionicons name={Platform.OS === "web" ? "cloud-upload-outline" : "camera"} size={20} color={C.gold} />
+                  <Text style={[styles.srcBtnText, { color: C.gold }]}>{Platform.OS === "web" ? "Upload" : "Camera"}</Text>
                 </Pressable>
               </Animated.View>
-              <Animated.View style={[styles.srcBtnWrap, { transform: [{ scale: gallerySpring.scale }] }]}>
-                <Pressable
-                  style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]}
-                  onPress={() => pickImage("gallery")}
-                  onPressIn={gallerySpring.onPressIn}
-                  onPressOut={gallerySpring.onPressOut}
-                >
-                  <Ionicons name="images" size={20} color={C.gold} />
-                  <Text style={[styles.srcBtnText, { color: C.gold }]}>Gallery</Text>
-                </Pressable>
-              </Animated.View>
+              {Platform.OS !== "web" && (
+                <Animated.View style={[styles.srcBtnWrap, { transform: [{ scale: gallerySpring.scale }] }]}>
+                  <Pressable
+                    style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]}
+                    onPress={() => pickImage("gallery")}
+                    onPressIn={gallerySpring.onPressIn}
+                    onPressOut={gallerySpring.onPressOut}
+                  >
+                    <Ionicons name="images" size={20} color={C.gold} />
+                    <Text style={[styles.srcBtnText, { color: C.gold }]}>Gallery</Text>
+                  </Pressable>
+                </Animated.View>
+              )}
             </View>
 
             <View style={[styles.pills, { backgroundColor: C.surface, borderColor: C.border }]}>

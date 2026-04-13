@@ -108,41 +108,6 @@ function buildPollinationsUrl(prompt: string, rank: number): string {
 
 async function generateImageUrl(analysis: FaceAnalysis, rec: HaircutRec): Promise<string> {
   const prompt = buildImagePrompt(analysis, rec);
-  const hfToken = process.env.HF_TOKEN;
-
-  if (hfToken) {
-    const maxAttempts = 2;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const res = await fetch(
-          "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${hfToken}`,
-              "Content-Type": "application/json",
-              Accept: "image/jpeg",
-            },
-            body: JSON.stringify({ inputs: prompt, parameters: { num_inference_steps: 4 } }),
-            signal: AbortSignal.timeout(45000),
-          }
-        );
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          const saved = saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
-          console.log(`Rank ${rec.rank}: HF image saved`);
-          return saved;
-        }
-        console.log(`Rank ${rec.rank}: HF got ${res.status}`);
-        if (res.status !== 429 && res.status !== 503) break;
-      } catch (err: any) {
-        console.log(`Rank ${rec.rank}: HF error: ${err?.message}`);
-      }
-    }
-  }
-
-  // Fallback: return Pollinations URL directly (client loads it)
   const url = buildPollinationsUrl(prompt, rec.rank);
   console.log(`Rank ${rec.rank}: using Pollinations URL`);
   return url;
