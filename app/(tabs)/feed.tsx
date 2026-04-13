@@ -322,11 +322,17 @@ export default function FeedScreen() {
   const posts = data?.posts ?? [];
   const competitions = data?.competitions ?? [];
 
-  // Merge competitions and posts into a single list sorted by date
+  // Merge competitions and posts: active competitions always surface first, then by date
+  const activeComps = competitions.filter((c: any) => c.competition.status === "active");
+  const otherComps = competitions.filter((c: any) => c.competition.status !== "active");
   const feedItems: any[] = [
-    ...competitions.map((c: any) => ({ ...c, _type: "competition", _date: c.competition.createdAt })),
-    ...posts.map((p: any) => ({ ...p, _type: "post", _date: p.post.createdAt })),
-  ].sort((a, b) => new Date(b._date).getTime() - new Date(a._date).getTime());
+    ...activeComps.map((c: any) => ({ ...c, _type: "competition", _priority: 0, _date: c.competition.createdAt })),
+    ...otherComps.map((c: any) => ({ ...c, _type: "competition", _priority: 1, _date: c.competition.createdAt })),
+    ...posts.map((p: any) => ({ ...p, _type: "post", _priority: 2, _date: p.post.createdAt })),
+  ].sort((a, b) => {
+    if (a._priority !== b._priority) return a._priority - b._priority;
+    return new Date(b._date).getTime() - new Date(a._date).getTime();
+  });
 
   return (
     <View style={[fS.container, { backgroundColor: C.background }]}>

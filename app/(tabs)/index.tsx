@@ -22,6 +22,7 @@ import { Ionicons, Feather } from "@expo/vector-icons";
 import { useApp } from "@/context/AppContext";
 import { getApiUrl } from "@/lib/query-client";
 import { fetch } from "expo/fetch";
+import { router, useLocalSearchParams } from "expo-router";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const TAB_BAR_HEIGHT = Platform.OS === "ios" ? 49 : Platform.OS === "android" ? 56 : 84;
@@ -48,6 +49,9 @@ export default function CutMatchScreen() {
   const insets = useSafeAreaInsets();
   const { currentUser, apiBase, settings, colors } = useApp();
   const C = colors;
+  const params = useLocalSearchParams<{ sendToFriendId?: string; sendToFriendName?: string }>();
+  const sendToFriendId = params.sendToFriendId ? parseInt(params.sendToFriendId) : null;
+  const sendToFriendName = params.sendToFriendName || null;
   const [phase, setPhase] = useState<Phase>("camera");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedBase64, setSelectedBase64] = useState<string | null>(null);
@@ -56,6 +60,7 @@ export default function CutMatchScreen() {
   const [shareModalVisible, setShareModalVisible] = useState(false);
   const [caption, setCaption] = useState("");
   const [isSharing, setIsSharing] = useState(false);
+  const [isSendingToFriend, setIsSendingToFriend] = useState(false);
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -267,6 +272,60 @@ export default function CutMatchScreen() {
     setIsSharing(false);
   };
 
+  const sendToFriend = async () => {
+    if (!currentUser || !analysis || !sendToFriendId) return;
+    setIsSendingToFriend(true);
+    try {
+      const facePhotoUrl = selectedBase64
+        ? `data:image/jpeg;base64,${selectedBase64}`
+        : selectedImage ?? "";
+
+      const postUrl = new URL("/api/posts", apiBase).toString();
+      const postRes = await fetch(postUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          facePhotoUrl,
+          faceShape: analysis.faceShape,
+          faceFeatures: analysis.faceFeatures,
+          hasGlasses: analysis.hasGlasses,
+          recommendations: analysis.recommendations,
+          caption: "",
+          isPublic: false,
+        }),
+      });
+      if (!postRes.ok) throw new Error("Failed to save CutMatch");
+      const newPost = await postRes.json();
+
+      const msgUrl = new URL("/api/messages", apiBase).toString();
+      const msgRes = await fetch(msgUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderId: currentUser.id,
+          receiverId: sendToFriendId,
+          content: `💇 Shared a CutMatch: ${analysis.faceShape} face shape`,
+          messageType: "cutmatch",
+          metadata: {
+            postId: newPost.id,
+            faceShape: analysis.faceShape,
+            recommendations: analysis.recommendations,
+          },
+        }),
+      });
+      if (!msgRes.ok) throw new Error("Failed to send message");
+
+      triggerHaptic("success");
+      Alert.alert("Sent!", `Your CutMatch was sent to ${sendToFriendName || "your friend"}.`, [
+        { text: "OK", onPress: () => { resetToCamera(); router.back(); } },
+      ]);
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Could not send CutMatch. Try again.");
+    }
+    setIsSendingToFriend(false);
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: C.background }]}>
       <LinearGradient
@@ -421,14 +480,29 @@ export default function CutMatchScreen() {
 
         {analysis && (
           <View style={[styles.shareBar, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 8, backgroundColor: C.background + "F0", borderTopColor: C.border }]}>
-            <Pressable style={[styles.keepBtn, { borderColor: C.border }]} onPress={resetToCamera}>
-              <Ionicons name="lock-closed-outline" size={16} color={C.textSecondary} />
-              <Text style={[styles.keepBtnText, { color: C.textSecondary }]}>Keep Private</Text>
-            </Pressable>
-            <Pressable style={[styles.shareBtn, { backgroundColor: C.gold }]} onPress={() => setShareModalVisible(true)}>
-              <Ionicons name="share-outline" size={16} color={C.background} />
-              <Text style={[styles.shareBtnText, { color: C.background }]}>Share to Feed</Text>
-            </Pressable>
+            {sendToFriendId ? (
+              <>
+                <Pressable style={[styles.keepBtn, { borderColor: C.border }]} onPress={() => { resetToCamera(); router.back(); }}>
+                  <Ionicons name="close-outline" size={16} color={C.textSecondary} />
+                  <Text style={[styles.keepBtnText, { color: C.textSecondary }]}>Cancel</Text>
+                </Pressable>
+                <Pressable style={[styles.shareBtn, { backgroundColor: C.gold }, isSendingToFriend && { opacity: 0.7 }]} onPress={sendToFriend} disabled={isSendingToFriend}>
+                  <Ionicons name="paper-plane-outline" size={16} color={C.background} />
+                  <Text style={[styles.shareBtnText, { color: C.background }]}>{isSendingToFriend ? "Sending..." : `Send to ${sendToFriendName || "Friend"}`}</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Pressable style={[styles.keepBtn, { borderColor: C.border }]} onPress={resetToCamera}>
+                  <Ionicons name="lock-closed-outline" size={16} color={C.textSecondary} />
+                  <Text style={[styles.keepBtnText, { color: C.textSecondary }]}>Keep Private</Text>
+                </Pressable>
+                <Pressable style={[styles.shareBtn, { backgroundColor: C.gold }]} onPress={() => setShareModalVisible(true)}>
+                  <Ionicons name="share-outline" size={16} color={C.background} />
+                  <Text style={[styles.shareBtnText, { color: C.background }]}>Share to Feed</Text>
+                </Pressable>
+              </>
+            )}
           </View>
         )}
       </Animated.View>

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -67,6 +67,16 @@ export const competitions = pgTable("competitions", {
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
 });
 
+export const competitionVotes = pgTable("competition_votes", {
+  id: serial("id").primaryKey(),
+  competitionId: integer("competition_id").notNull().references(() => competitions.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  votedForUserId: integer("voted_for_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").default(sql`now()`).notNull(),
+}, (table) => ({
+  uniqueVote: unique("unique_competition_user_vote").on(table.competitionId, table.userId),
+}));
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertPostSchema = createInsertSchema(posts).omit({ id: true, createdAt: true });
 export const insertRatingSchema = createInsertSchema(ratings).omit({ id: true, createdAt: true });
@@ -82,3 +92,4 @@ export type Rating = typeof ratings.$inferSelect;
 export type Friendship = typeof friendships.$inferSelect;
 export type DirectMessage = typeof directMessages.$inferSelect;
 export type Competition = typeof competitions.$inferSelect;
+export type CompetitionVote = typeof competitionVotes.$inferSelect;

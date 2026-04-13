@@ -3,7 +3,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
-import { users, posts, ratings, friendships, directMessages, competitions } from "@shared/schema";
+import { users, posts, ratings, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
 import { eq, desc, and, or, ne, sql, lt, isNotNull } from "drizzle-orm";
 import crypto from "crypto";
 import * as fs from "fs";
@@ -95,37 +95,49 @@ Include exactly 4 recommendations. Be concise and fast.`,
   return JSON.parse(match[0]);
 }
 
-function buildPollinationsUrl(analysis: FaceAnalysis, rec: HaircutRec): string {
+function buildHfPrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
   const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-  const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
-  const encoded = encodeURIComponent(prompt.slice(0, 500));
-  const seed = Math.floor(Math.random() * 999999);
-  return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
+  return `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`.slice(0, 500);
 }
 
-async function fetchAndSaveImage(pollinationsUrl: string, rank: number): Promise<string | null> {
-  const maxAttempts = 4;
+async function generateAndSaveImageHf(prompt: string, rank: number): Promise<string | null> {
+  const hfToken = process.env.HF_TOKEN;
+  if (!hfToken) {
+    console.log(`Rank ${rank}: HF_TOKEN not set, skipping image generation`);
+    return null;
+  }
+  const maxAttempts = 3;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) {
-      const delay = attempt * 3000;
+      const delay = attempt * 2000;
       console.log(`Rank ${rank}: retry #${attempt} in ${delay}ms`);
       await new Promise((r) => setTimeout(r, delay));
     }
     try {
-      const res = await fetch(pollinationsUrl, {
-        headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*" },
-        signal: AbortSignal.timeout(45000),
-      });
+      const res = await fetch(
+        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${hfToken}`,
+            "Content-Type": "application/json",
+            Accept: "image/jpeg",
+          },
+          body: JSON.stringify({ inputs: prompt, parameters: { num_inference_steps: 4 } }),
+          signal: AbortSignal.timeout(60000),
+        }
+      );
       if (res.ok) {
         const buf = await res.arrayBuffer();
         const saved = saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
-        console.log(`Rank ${rank}: saved to ${saved}`);
+        console.log(`Rank ${rank}: HF image saved to ${saved}`);
         return saved;
       }
-      console.log(`Rank ${rank}: attempt ${attempt + 1} got ${res.status}`);
+      const errText = await res.text().catch(() => "");
+      console.log(`Rank ${rank}: HF attempt ${attempt + 1} got ${res.status}: ${errText.slice(0, 200)}`);
       if (res.status !== 429 && res.status !== 503) break;
     } catch (err: any) {
-      console.log(`Rank ${rank}: attempt ${attempt + 1} error: ${err?.message}`);
+      console.log(`Rank ${rank}: HF attempt ${attempt + 1} error: ${err?.message}`);
     }
   }
   return null;
@@ -202,12 +214,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const recsWithImages = [];
       for (const rec of analysis.recommendations) {
-        const pollinationsUrl = buildPollinationsUrl(analysis, rec);
-        const savedUrl = await fetchAndSaveImage(pollinationsUrl, rec.rank);
+        const prompt = buildHfPrompt(analysis, rec);
+        const savedUrl = await generateAndSaveImageHf(prompt, rec.rank);
         recsWithImages.push({
           rank: rec.rank, name: rec.name, description: rec.description,
           whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-          generatedImage: savedUrl ?? pollinationsUrl,
+          generatedImage: savedUrl ?? null,
         });
       }
 
@@ -298,9 +310,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       send("status", { message: "Generating your AI looks..." });
 
       for (const rec of analysis.recommendations) {
-        const pollinationsUrl = buildPollinationsUrl(analysis, rec);
-        const savedUrl = await fetchAndSaveImage(pollinationsUrl, rec.rank);
-        send("image", { rank: rec.rank, generatedImage: savedUrl ?? pollinationsUrl });
+        const prompt = buildHfPrompt(analysis, rec);
+        const savedUrl = await generateAndSaveImageHf(prompt, rec.rank);
+        send("image", { rank: rec.rank, generatedImage: savedUrl ?? null });
       }
 
       send("done", {});
@@ -604,18 +616,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/competitions/:id/vote", async (req: Request, res: Response) => {
     try {
       const compId = parseInt(req.params.id);
-      const { votedForUserId } = req.body;
+      const { votedForUserId, voterId } = req.body;
+      if (!voterId) return res.status(400).json({ error: "voterId required" });
+
       const [comp] = await db.select().from(competitions).where(eq(competitions.id, compId));
       if (!comp) return res.status(404).json({ error: "Not found" });
       if (comp.status !== "active") return res.status(400).json({ error: "Competition not active" });
+
+      const [existingVote] = await db.select().from(competitionVotes)
+        .where(and(eq(competitionVotes.competitionId, compId), eq(competitionVotes.userId, voterId)));
+      if (existingVote) return res.status(409).json({ error: "Already voted", alreadyVoted: true, votedForUserId: existingVote.votedForUserId });
 
       const updates: any = {};
       if (comp.challengerId === votedForUserId) updates.challengerVotes = (comp.challengerVotes ?? 0) + 1;
       else if (comp.challengeeId === votedForUserId) updates.challengeeVotes = (comp.challengeeVotes ?? 0) + 1;
       else return res.status(400).json({ error: "Invalid vote target" });
 
+      await db.insert(competitionVotes).values({ competitionId: compId, userId: voterId, votedForUserId });
       const [updated] = await db.update(competitions).set(updates).where(eq(competitions.id, compId)).returning();
       res.json(updated);
+    } catch (err: any) {
+      if (err.message?.includes("unique_competition_user_vote")) {
+        return res.status(409).json({ error: "Already voted", alreadyVoted: true });
+      }
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  app.get("/api/competitions/:id/my-vote", async (req: Request, res: Response) => {
+    try {
+      const compId = parseInt(req.params.id);
+      const userId = parseInt(req.query.userId as string);
+      if (!userId) return res.json({ voted: false });
+      const [vote] = await db.select().from(competitionVotes)
+        .where(and(eq(competitionVotes.competitionId, compId), eq(competitionVotes.userId, userId)));
+      if (vote) return res.json({ voted: true, votedForUserId: vote.votedForUserId });
+      res.json({ voted: false });
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 

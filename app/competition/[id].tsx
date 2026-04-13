@@ -26,7 +26,6 @@ export default function CompetitionScreen() {
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
   const qc = useQueryClient();
-  const [voted, setVoted] = useState<number | null>(null);
   const [voting, setVoting] = useState(false);
 
   const { data: comp, isLoading: compLoading } = useQuery({
@@ -39,6 +38,19 @@ export default function CompetitionScreen() {
     },
     refetchInterval: 10000,
   });
+
+  const { data: myVoteData } = useQuery({
+    queryKey: ["/api/competitions", competitionId, "my-vote", currentUser?.id],
+    enabled: !!currentUser,
+    queryFn: async () => {
+      const url = new URL(`/api/competitions/${competitionId}/my-vote?userId=${currentUser!.id}`, apiBase).toString();
+      const res = await fetch(url);
+      if (!res.ok) return { voted: false };
+      return res.json();
+    },
+  });
+
+  const voted: number | null = myVoteData?.voted ? myVoteData.votedForUserId : null;
 
   const { data: challengerPost } = useQuery({
     queryKey: ["/api/posts", comp?.challengerPostId],
@@ -83,19 +95,28 @@ export default function CompetitionScreen() {
   });
 
   const voteFor = async (userId: number) => {
-    if (!currentUser || voting) return;
+    if (!currentUser || voting || voted !== null) return;
     setVoting(true);
     try {
       const url = new URL(`/api/competitions/${competitionId}/vote`, apiBase).toString();
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ votedForUserId: userId }),
+        body: JSON.stringify({ votedForUserId: userId, voterId: currentUser.id }),
       });
-      if (!res.ok) throw new Error("Vote failed");
-      setVoted(userId);
-      qc.invalidateQueries({ queryKey: ["/api/competitions", competitionId] });
-      Alert.alert("Vote Cast!", "Your vote has been recorded.");
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.alreadyVoted) {
+          qc.invalidateQueries({ queryKey: ["/api/competitions", competitionId, "my-vote", currentUser.id] });
+          Alert.alert("Already Voted", "You've already cast your vote in this competition.");
+        } else {
+          throw new Error(data.error || "Vote failed");
+        }
+      } else {
+        qc.invalidateQueries({ queryKey: ["/api/competitions", competitionId] });
+        qc.invalidateQueries({ queryKey: ["/api/competitions", competitionId, "my-vote", currentUser.id] });
+        Alert.alert("Vote Cast!", "Your vote has been recorded.");
+      }
     } catch (e: any) {
       Alert.alert("Error", e.message);
     }

@@ -121,28 +121,9 @@ export default function ChatScreen() {
     setInput("");
   };
 
-  const sendCutMatch = async () => {
+  const sendCutMatch = () => {
     setShowPlusMenu(false);
-    if (!currentUser) return;
-    try {
-      const url = new URL(`/api/users/${currentUser.id}/posts`, apiBase).toString();
-      const res = await fetch(url);
-      if (!res.ok) return Alert.alert("No posts", "Do a CutMatch first, then share it here.");
-      const posts = await res.json();
-      if (!posts.length) return Alert.alert("No posts", "Complete a CutMatch first to share it.");
-      const latest = posts[0];
-      sendMutation.mutate({
-        content: `💇 Shared a CutMatch: ${latest.faceShape} face shape`,
-        messageType: "cutmatch",
-        metadata: {
-          postId: latest.id,
-          faceShape: latest.faceShape,
-          recommendations: latest.recommendations,
-        },
-      });
-    } catch {
-      Alert.alert("Error", "Could not send CutMatch.");
-    }
+    router.push({ pathname: "/(tabs)", params: { sendToFriendId: String(otherId), sendToFriendName: otherName } } as any);
   };
 
   const startCompetition = async () => {
