@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Modal,
   ScrollView,
+  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -59,6 +60,9 @@ function AvatarCircle({ name, size = 40, avatarUrl }: { name: string; size?: num
 function RecsModal({ post, user, visible, onClose, currentUserId, apiBase, colors: C }: any) {
   const qc = useQueryClient();
   const [userRank, setUserRank] = useState<number | null>(null);
+  const [friendAdded, setFriendAdded] = useState(false);
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const checkScaleAnim = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -73,14 +77,28 @@ function RecsModal({ post, user, visible, onClose, currentUserId, apiBase, color
     } catch {}
   };
 
-  const addFriend = async () => {
-    if (!currentUserId || user.id === currentUserId) return;
+  const addFriend = useCallback(async () => {
+    if (!currentUserId || user.id === currentUserId || friendAdded) return;
+
+    Haptics?.notificationAsync?.(Haptics.NotificationFeedbackType?.Success);
+
+    Animated.sequence([
+      Animated.spring(scaleAnim, { toValue: 1.08, useNativeDriver: true, speed: 40, bounciness: 12 }),
+      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 6 }),
+    ]).start();
+
+    setFriendAdded(true);
+
+    Animated.spring(checkScaleAnim, {
+      toValue: 1, useNativeDriver: true, speed: 14, bounciness: 18, delay: 80,
+    }).start();
+
     try {
       const url = new URL("/api/friends/request", apiBase).toString();
       await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requesterId: currentUserId, addresseeId: user.id }) });
       qc.invalidateQueries({ queryKey: ["/api/friends"] });
     } catch {}
-  };
+  }, [currentUserId, user.id, friendAdded, scaleAnim, checkScaleAnim, apiBase, qc]);
 
   const rankColors: Record<number, string> = { 1: C.rank1, 2: C.rank2, 3: C.rank3, 4: C.rank4 };
   const diffColor = (d: string) => d === "Easy" ? "#4CAF50" : d === "Medium" ? "#FF9800" : "#F44336";
@@ -132,10 +150,30 @@ function RecsModal({ post, user, visible, onClose, currentUserId, apiBase, color
               );
             })}
             {currentUserId && user.id !== currentUserId && (
-              <Pressable style={[rS.friendBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]} onPress={addFriend}>
-                <Ionicons name="person-add-outline" size={16} color={C.gold} />
-                <Text style={[rS.friendBtnText, { color: C.gold }]}>Add Friend</Text>
-              </Pressable>
+              <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+                <Pressable
+                  style={[
+                    rS.friendBtn,
+                    friendAdded
+                      ? { backgroundColor: "#4CAF5022", borderColor: "#4CAF5060" }
+                      : { backgroundColor: C.gold + "14", borderColor: C.gold + "40" },
+                  ]}
+                  onPress={addFriend}
+                  disabled={friendAdded}
+                >
+                  {friendAdded ? (
+                    <Animated.View style={{ transform: [{ scale: checkScaleAnim }], flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
+                      <Text style={[rS.friendBtnText, { color: "#4CAF50" }]}>Friend Request Sent!</Text>
+                    </Animated.View>
+                  ) : (
+                    <>
+                      <Ionicons name="person-add-outline" size={16} color={C.gold} />
+                      <Text style={[rS.friendBtnText, { color: C.gold }]}>Add Friend</Text>
+                    </>
+                  )}
+                </Pressable>
+              </Animated.View>
             )}
           </ScrollView>
         </View>
