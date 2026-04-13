@@ -53,7 +53,7 @@ function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
 }
 
 // ── GROQ AI (free, ultra-fast inference) ─────────────────────────────────────
-// Uses Groq's free API with llama-4-scout for vision-based face analysis.
+// Uses Groq's free API: llama-3.3-70b-versatile for chat, vision models for face analysis.
 let _groq: OpenAI | null = null;
 function getGroq(): OpenAI {
   if (!_groq) {
@@ -90,19 +90,48 @@ interface FaceAnalysis {
 }
 
 function repairTruncatedJson(raw: string): FaceAnalysis | null {
+  // Strip control characters that break JSON parsers
+  const sanitized = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+
   // Try trimming after last complete recommendation object and close array+object
-  const lastClose = raw.lastIndexOf("},");
+  const lastClose = sanitized.lastIndexOf("},");
   if (lastClose !== -1) {
-    const candidate = raw.slice(0, lastClose + 1) + "]}";
+    const candidate = sanitized.slice(0, lastClose + 1) + "]}";
     try { return JSON.parse(candidate); } catch {}
   }
   // Try the same without trailing comma (last object may be the final one)
-  const lastBrace = raw.lastIndexOf("}");
+  const lastBrace = sanitized.lastIndexOf("}");
   if (lastBrace !== -1) {
     // Build candidates: close array, close root object
     for (const suffix of ["]}}", "]}"] ) {
-      const candidate = raw.slice(0, lastBrace + 1) + suffix;
+      const candidate = sanitized.slice(0, lastBrace + 1) + suffix;
       try { return JSON.parse(candidate); } catch {}
+    }
+  }
+  // Try to extract just the recommendations array and rebuild minimal object
+  const recsMatch = sanitized.match(/"recommendations"\s*:\s*(\[[\s\S]*)/);
+  if (recsMatch) {
+    const arrayPart = recsMatch[1];
+    const lastRecsClose = arrayPart.lastIndexOf("}");
+    if (lastRecsClose !== -1) {
+      for (const suffix of ["]}", "]"] ) {
+        try {
+          const recsJson = JSON.parse(arrayPart.slice(0, lastRecsClose + 1) + suffix);
+          if (Array.isArray(recsJson)) {
+            const faceShapeMatch = sanitized.match(/"faceShape"\s*:\s*"([^"]+)"/);
+            return {
+              faceShape: faceShapeMatch?.[1] || "oval",
+              faceFeatures: "",
+              hasGlasses: false,
+              hairColor: "",
+              skinTone: "medium",
+              gender: "person",
+              ageRange: "20s",
+              recommendations: recsJson,
+            } as FaceAnalysis;
+          }
+        } catch {}
+      }
     }
   }
   return null;
@@ -124,6 +153,7 @@ function extractJson(content: string): FaceAnalysis {
   const cleaned = content
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "")
     .trim();
 
   // Extract the outermost JSON object — greedy match to capture full content
@@ -161,8 +191,8 @@ async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
 {"faceShape":"oval|round|square|heart|oblong|diamond","faceFeatures":"brief 1-2 sentence description","hasGlasses":false,"hairColor":"color description","skinTone":"fair|light|medium|olive|tan|dark brown|deep","gender":"man|woman|person","ageRange":"teens|20s|30s|40s|50s+","recommendations":[{"rank":1,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description for image generation"},{"rank":2,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"},{"rank":3,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"},{"rank":4,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"}]}
 Return exactly 4 recommendations. Output ONLY the JSON object.`;
 
-  const makeRequest = () => getGroq().chat.completions.create({
-    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+  const makeRequest = (model: string) => getGroq().chat.completions.create({
+    model,
     messages: [
       { role: "system", content: systemPrompt },
       {
@@ -176,10 +206,14 @@ Return exactly 4 recommendations. Output ONLY the JSON object.`;
     max_tokens: 2000,
   });
 
+  const visionModels = [
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "llama-3.2-90b-vision-preview",
+  ];
   let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (const model of visionModels) {
     try {
-      const response = await makeRequest();
+      const response = await makeRequest(model);
       const content = response.choices[0]?.message?.content || "";
       if (!content) throw new Error("Empty AI response");
       const analysis = extractJson(content);
@@ -189,7 +223,7 @@ Return exactly 4 recommendations. Output ONLY the JSON object.`;
       return analysis;
     } catch (err: any) {
       lastError = err;
-      console.error(`analyzeFace attempt ${attempt + 1} failed:`, err.message);
+      console.error(`analyzeFace with model ${model} failed:`, err.message);
     }
   }
   throw lastError || new Error("Analysis failed after retries");
@@ -849,7 +883,7 @@ Never be dismissive. If unsure, offer general guidance and encourage the user to
       }));
 
       const response = await getGroq().chat.completions.create({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        model: "llama-3.3-70b-versatile",
         messages: [
           { role: "system", content: systemPrompt },
           ...chatHistory,
