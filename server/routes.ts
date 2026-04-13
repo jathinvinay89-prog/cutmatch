@@ -475,6 +475,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
+  app.get("/api/friends/:userId/requests", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      const pending = await db
+        .select({ friendship: friendships, requester: { id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl } })
+        .from(friendships)
+        .innerJoin(users, eq(users.id, friendships.requesterId))
+        .where(and(eq(friendships.addresseeId, userId), eq(friendships.status, "pending")));
+      res.json(pending);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.post("/api/friends/:id/accept", async (req: Request, res: Response) => {
+    try {
+      const [updated] = await db.update(friendships).set({ status: "accepted" }).where(eq(friendships.id, parseInt(req.params.id))).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.post("/api/friends/:id/deny", async (req: Request, res: Response) => {
+    try {
+      await db.delete(friendships).where(eq(friendships.id, parseInt(req.params.id)));
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
   app.get("/api/friends/:userId", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.params.userId);
