@@ -272,17 +272,66 @@ async function fetchPollinationsImage(url: string, retries = 2, delayMs = 2000):
   return null;
 }
 
+async function fetchFluxImage(prompt: string): Promise<Buffer | null> {
+  const token = process.env.HUGGINGFACE_API_TOKEN;
+  if (!token) {
+    console.warn("FLUX skipped: HUGGINGFACE_API_TOKEN not set, falling back to Pollinations.");
+    return null;
+  }
+  try {
+    const response = await fetch(
+      "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ inputs: prompt }),
+        signal: AbortSignal.timeout(30000),
+      }
+    );
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      if (response.status === 503 || text.toLowerCase().includes("loading") || text.toLowerCase().includes("busy")) {
+        throw new Error("Model busy");
+      }
+      throw new Error(`HuggingFace HTTP ${response.status}: ${text.slice(0, 200)}`);
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`Unexpected content-type: ${contentType} — ${text.slice(0, 200)}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const buf = Buffer.from(arrayBuffer);
+    if (buf.length < 1000) throw new Error("Response too small, likely not a valid image");
+    return buf;
+  } catch (err: any) {
+    console.warn(`FLUX fetch failed: ${err.message}`);
+    return null;
+  }
+}
+
 async function generateImageUrl(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
   const prompt = buildImagePrompt(analysis, rec);
+
+  const fluxBuf = await fetchFluxImage(prompt);
+  if (fluxBuf) {
+    const localUrl = saveImageBuffer(fluxBuf);
+    console.log(`Rank ${rec.rank}: saved FLUX image to ${localUrl}`);
+    return localUrl;
+  }
+
+  console.log(`Rank ${rec.rank}: falling back to Pollinations...`);
   const url = buildPollinationsUrl(prompt, rec.rank);
-  console.log(`Rank ${rec.rank}: fetching Pollinations image...`);
   const buf = await fetchPollinationsImage(url);
   if (!buf) {
     console.warn(`Rank ${rec.rank}: all retries failed, skipping image`);
     return null;
   }
   const localUrl = saveImageBuffer(buf);
-  console.log(`Rank ${rec.rank}: saved to ${localUrl}`);
+  console.log(`Rank ${rec.rank}: saved Pollinations image to ${localUrl}`);
   return localUrl;
 }
 
@@ -330,6 +379,15 @@ async function checkExpiredCompetitions() {
 setInterval(checkExpiredCompetitions, 10 * 60 * 1000);
 
 export async function registerRoutes(app: Express): Promise<Server> {
+
+  if (!process.env.HUGGINGFACE_API_TOKEN) {
+    console.warn(
+      "[image] HUGGINGFACE_API_TOKEN is not set — FLUX.1 schnell image generation is disabled. " +
+      "Falling back to Pollinations for all image requests."
+    );
+  } else {
+    console.log("[image] HUGGINGFACE_API_TOKEN detected — FLUX.1 schnell image generation enabled.");
+  }
 
   // ── STATIC UPLOADS ───────────────────────────────────────────────────────
   app.use("/uploads", express.static(UPLOADS_DIR));
