@@ -216,7 +216,6 @@ Return exactly 4 recommendations. Output ONLY the JSON object.`;
 
   const visionModels = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.2-90b-vision-preview",
   ];
   let lastError: Error | null = null;
   for (const model of visionModels) {
