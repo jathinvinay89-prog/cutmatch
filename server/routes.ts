@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
 import { users, posts, ratings, friendships, directMessages, competitions } from "@shared/schema";
-import { eq, desc, and, or, ne, sql, lt } from "drizzle-orm";
+import { eq, desc, and, or, ne, sql, lt, isNotNull } from "drizzle-orm";
 import crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -95,30 +95,12 @@ Include exactly 4 recommendations. Be concise and fast.`,
   return JSON.parse(match[0]);
 }
 
-async function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
-  try {
-    const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-    const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
-    const encoded = encodeURIComponent(prompt.slice(0, 500));
-    const seed = Math.floor(Math.random() * 999999);
-    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
-
-    const imgRes = await fetch(imageUrl, {
-      headers: {
-        "User-Agent": "CutMatch/1.0",
-        "Referer": "https://cutmatch.app",
-      },
-    });
-    if (!imgRes.ok) {
-      console.error(`Pollinations returned ${imgRes.status} for rank ${rec.rank}`);
-      return null;
-    }
-    const buf = await imgRes.arrayBuffer();
-    return saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
-  } catch (err: any) {
-    console.error(`Image gen failed for ${rec.name}:`, err?.message);
-    return null;
-  }
+function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): string {
+  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
+  const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
+  const encoded = encodeURIComponent(prompt.slice(0, 500));
+  const seed = Math.floor(Math.random() * 999999);
+  return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -190,12 +172,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = await Promise.all(
-        analysis.recommendations.map(async (rec) => {
-          const imgUrl = await generateHaircutImage(analysis, rec);
-          return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: imgUrl };
-        })
-      );
+      const recsWithImages = analysis.recommendations.map((rec) => ({
+        rank: rec.rank, name: rec.name, description: rec.description,
+        whyItFits: rec.whyItFits, difficulty: rec.difficulty,
+        generatedImage: generateHaircutImage(analysis, rec),
+      }));
 
       res.json({
         faceShape: analysis.faceShape,
@@ -283,12 +264,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       send("status", { message: "Generating your AI looks..." });
 
-      await Promise.all(
-        analysis.recommendations.map(async (rec) => {
-          const imageUrl = await generateHaircutImage(analysis, rec);
-          send("image", { rank: rec.rank, generatedImage: imageUrl });
-        })
-      );
+      for (const rec of analysis.recommendations) {
+        send("image", { rank: rec.rank, generatedImage: generateHaircutImage(analysis, rec) });
+      }
 
       send("done", {});
       res.end();
@@ -362,11 +340,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .orderBy(desc(posts.createdAt))
         .limit(50);
 
-      // Active competitions (both posts submitted)
+      // Visible competitions: active (both submitted) OR pending with challenger's post already submitted
       const activeComps = await db
         .select()
         .from(competitions)
-        .where(eq(competitions.status, "active"))
+        .where(
+          or(
+            eq(competitions.status, "active"),
+            and(eq(competitions.status, "pending"), isNotNull(competitions.challengerPostId))
+          )
+        )
         .orderBy(desc(competitions.createdAt))
         .limit(10);
 
