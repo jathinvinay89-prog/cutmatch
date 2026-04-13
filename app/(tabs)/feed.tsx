@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
@@ -440,21 +440,35 @@ function PostCard({ item, currentUserId, apiBase, colors: C, compact, showCaptio
   );
 }
 
-function AnimatedFeedList({ feedItems, currentUserId, apiBase, colors: C, compact, showCaptions, bottomPad, onRefresh }: any) {
+function AnimatedFeedList({
+  feedItems, currentUserId, apiBase, colors: C, compact, showCaptions, bottomPad,
+  onRefresh, isRefreshing, onLoadMore, isLoadingMore, hasMore, resetKey,
+}: any) {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const translateAnim = useRef(new Animated.Value(0)).current;
-  const prevItemsRef = useRef(feedItems);
+  const prevResetKey = useRef(resetKey);
 
   useEffect(() => {
-    if (prevItemsRef.current === feedItems) return;
-    prevItemsRef.current = feedItems;
+    if (prevResetKey.current === resetKey) return;
+    prevResetKey.current = resetKey;
     fadeAnim.setValue(0);
     translateAnim.setValue(12);
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }),
       Animated.spring(translateAnim, { toValue: 0, tension: 80, friction: 14, useNativeDriver: true }),
     ]).start();
-  }, [feedItems]);
+  }, [resetKey]);
+
+  const renderFooter = () => {
+    if (!hasMore) return null;
+    return (
+      <View style={{ paddingVertical: 16, alignItems: "center" }}>
+        {isLoadingMore
+          ? <ActivityIndicator color={C.gold} size="small" />
+          : null}
+      </View>
+    );
+  };
 
   return (
     <Animated.View style={{ flex: 1, opacity: fadeAnim, transform: [{ translateY: translateAnim }] }}>
@@ -484,7 +498,10 @@ function AnimatedFeedList({ feedItems, currentUserId, apiBase, colors: C, compac
         }}
         contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + bottomPad + 16, paddingTop: 4 }}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} tintColor={C.gold} />}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={C.gold} />}
+        onEndReached={hasMore && !isLoadingMore ? onLoadMore : undefined}
+        onEndReachedThreshold={0.3}
+        ListFooterComponent={renderFooter}
       />
     </Animated.View>
   );
@@ -497,19 +514,57 @@ export default function FeedScreen() {
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
   const [filter, setFilter] = useState<FeedFilter>("all");
 
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: ["/api/feed"],
-    queryFn: async () => {
-      const url = new URL("/api/feed", apiBase).toString();
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to load feed");
-      return res.json() as Promise<{ posts: any[]; competitions: any[] }>;
-    },
-    refetchInterval: 30000,
-  });
+  const [allPosts, setAllPosts] = useState<any[]>([]);
+  const [competitions, setCompetitions] = useState<any[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
 
-  const posts = data?.posts ?? [];
-  const competitions = data?.competitions ?? [];
+  const fetchFeed = useCallback(async (cursor?: string, append = false) => {
+    try {
+      const url = new URL("/api/feed", apiBase);
+      if (cursor) url.searchParams.set("cursor", cursor);
+      url.searchParams.set("limit", "20");
+      const res = await fetch(url.toString());
+      if (!res.ok) throw new Error("Failed to load feed");
+      const data = await res.json() as { posts: any[]; competitions: any[]; nextCursor: string | null };
+      if (append) {
+        setAllPosts((prev) => [...prev, ...data.posts]);
+      } else {
+        setAllPosts(data.posts);
+        setCompetitions(data.competitions);
+        setResetKey((k) => k + 1);
+      }
+      setNextCursor(data.nextCursor);
+    } catch (e) {
+      console.error("Feed fetch error:", e);
+    }
+  }, [apiBase]);
+
+  useEffect(() => {
+    setIsLoading(true);
+    fetchFeed().finally(() => setIsLoading(false));
+  }, [fetchFeed]);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await fetchFeed();
+    setIsRefreshing(false);
+  }, [fetchFeed]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    await fetchFeed(nextCursor, true);
+    setIsLoadingMore(false);
+  }, [nextCursor, isLoadingMore, fetchFeed]);
+
+  useEffect(() => {
+    const interval = setInterval(handleRefresh, 30000);
+    return () => clearInterval(interval);
+  }, [handleRefresh]);
 
   const feedItems = useMemo(() => {
     const activeComps = competitions.filter((c: any) => c.competition.status === "active");
@@ -517,7 +572,7 @@ export default function FeedScreen() {
     const allItems: any[] = [
       ...activeComps.map((c: any) => ({ ...c, _type: "competition", _priority: 0, _date: c.competition.createdAt })),
       ...otherComps.map((c: any) => ({ ...c, _type: "competition", _priority: 1, _date: c.competition.createdAt })),
-      ...posts.map((p: any) => ({ ...p, _type: "post", _priority: 2, _date: p.post.createdAt })),
+      ...allPosts.map((p: any) => ({ ...p, _type: "post", _priority: 2, _date: p.post.createdAt })),
     ].sort((a, b) => {
       if (a._priority !== b._priority) return a._priority - b._priority;
       return new Date(b._date).getTime() - new Date(a._date).getTime();
@@ -528,7 +583,7 @@ export default function FeedScreen() {
       if (filter === "posts") return item._type === "post";
       return true;
     });
-  }, [posts, competitions, filter]);
+  }, [allPosts, competitions, filter]);
 
   const isDark = C.background === "#0A0A0A";
 
@@ -561,7 +616,12 @@ export default function FeedScreen() {
           compact={settings.compactFeedMode}
           showCaptions={settings.showCaptions}
           bottomPad={bottomPad}
-          onRefresh={refetch}
+          onRefresh={handleRefresh}
+          isRefreshing={isRefreshing}
+          onLoadMore={handleLoadMore}
+          isLoadingMore={isLoadingMore}
+          hasMore={!!nextCursor}
+          resetKey={resetKey}
         />
       )}
     </View>

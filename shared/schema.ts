@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, unique, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -25,7 +25,11 @@ export const posts = pgTable("posts", {
   isPublic: boolean("is_public").default(true),
   postType: text("post_type").default("cutmatch"),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
-});
+}, (table) => ({
+  postsUserIdIdx: index("posts_user_id_idx").on(table.userId),
+  postsPublicTypeCreatedIdx: index("posts_public_type_created_idx").on(table.isPublic, table.postType, table.createdAt),
+  postsCreatedAtIdx: index("posts_created_at_idx").on(table.createdAt),
+}));
 
 export const ratings = pgTable("ratings", {
   id: serial("id").primaryKey(),
@@ -65,7 +69,11 @@ export const competitions = pgTable("competitions", {
   expiresAt: timestamp("expires_at"),
   winnerId: integer("winner_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
-});
+}, (table) => ({
+  competitionsStatusCreatedIdx: index("competitions_status_created_idx").on(table.status, table.createdAt),
+  competitionsChallengerIdx: index("competitions_challenger_id_idx").on(table.challengerId),
+  competitionsChallengeeeIdx: index("competitions_challengee_id_idx").on(table.challengeeId),
+}));
 
 export const competitionVotes = pgTable("competition_votes", {
   id: serial("id").primaryKey(),

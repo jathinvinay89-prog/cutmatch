@@ -5,9 +5,33 @@ import OpenAI from "openai";
 import { db } from "./db";
 import { users, posts, ratings, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
 import { eq, desc, and, or, ne, sql, lt, isNotNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+
+// ── FEED CACHE ────────────────────────────────────────────────────────────────
+interface FeedCacheEntry {
+  data: any;
+  expiresAt: number;
+}
+const feedCache = new Map<string, FeedCacheEntry>();
+const FEED_CACHE_TTL_MS = 10_000;
+
+function getFeedCache(key: string): any | null {
+  const entry = feedCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { feedCache.delete(key); return null; }
+  return entry.data;
+}
+
+function setFeedCache(key: string, data: any): void {
+  feedCache.set(key, { data, expiresAt: Date.now() + FEED_CACHE_TTL_MS });
+}
+
+function invalidateFeedCache(): void {
+  feedCache.clear();
+}
 
 // ── IMAGE STORAGE ────────────────────────────────────────────────────────────
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
@@ -583,57 +607,117 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── FEED ──────────────────────────────────────────────────────────────────
   app.get("/api/feed", async (req: Request, res: Response) => {
     try {
-      // Regular posts
-      const regularPosts = await db
+      const cursor = req.query.cursor as string | undefined;
+      const parsedLimit = Number(req.query.limit);
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(Math.floor(parsedLimit), 50) : 20;
+      const isFirstPage = !cursor;
+      const cacheKey = `first-page:${limit}`;
+
+      // Serve from cache on first page requests
+      if (isFirstPage) {
+        const cached = getFeedCache(cacheKey);
+        if (cached) {
+          const rewritePost = (post: any) => {
+            if (!post) return post;
+            const recs = Array.isArray(post.recommendations)
+              ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
+              : post.recommendations;
+            return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+          };
+          const rewriteUser = (user: any) => user ? { ...user, avatarUrl: rewriteImageUrl(user.avatarUrl, req) } : user;
+
+          const result = {
+            posts: cached.posts.map((row: any) => ({ post: rewritePost(row.post), user: rewriteUser(row.user) })),
+            competitions: cached.competitions.map((c: any) => ({
+              ...c,
+              challengerUser: rewriteUser(c.challengerUser),
+              challengeeUser: rewriteUser(c.challengeeUser),
+              challengerPost: rewritePost(c.challengerPost),
+              challengeePost: rewritePost(c.challengeePost),
+            })),
+            nextCursor: cached.nextCursor,
+          };
+          return res.json(result);
+        }
+      }
+
+      // Build posts query with cursor-based pagination
+      const postsQuery = db
         .select({
           post: posts,
           user: { id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl },
         })
         .from(posts)
         .innerJoin(users, eq(posts.userId, users.id))
-        .where(and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch")))
-        .orderBy(desc(posts.createdAt))
-        .limit(50);
-
-      // Visible competitions: active (both submitted) OR pending with challenger's post already submitted
-      const activeComps = await db
-        .select()
-        .from(competitions)
         .where(
-          or(
-            eq(competitions.status, "active"),
-            and(eq(competitions.status, "pending"), isNotNull(competitions.challengerPostId))
-          )
+          cursor
+            ? and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch"), lt(posts.createdAt, new Date(cursor)))
+            : and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch"))
         )
-        .orderBy(desc(competitions.createdAt))
-        .limit(10);
+        .orderBy(desc(posts.createdAt))
+        .limit(limit + 1);
 
-      // Enrich competitions with user and post data
-      const enrichedComps = await Promise.all(activeComps.map(async (comp) => {
-        const [cUser] = await db.select({ id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl })
-          .from(users).where(eq(users.id, comp.challengerId));
-        const [eUser] = await db.select({ id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl })
-          .from(users).where(eq(users.id, comp.challengeeId));
+      // Competitions only on first page — single JOIN query (no N+1)
+      const challengerUser = alias(users, "challenger_user");
+      const challengeeUser = alias(users, "challengee_user");
+      const challengerPost = alias(posts, "challenger_post");
+      const challengeePost = alias(posts, "challengee_post");
 
-        let challengerPost = null, challengeePost = null;
-        if (comp.challengerPostId) {
-          const [row] = await db.select().from(posts).where(eq(posts.id, comp.challengerPostId));
-          challengerPost = row;
-        }
-        if (comp.challengeePostId) {
-          const [row] = await db.select().from(posts).where(eq(posts.id, comp.challengeePostId));
-          challengeePost = row;
-        }
+      const [regularPosts, compsRaw] = await Promise.all([
+        postsQuery,
+        isFirstPage
+          ? db
+              .select({
+                competition: competitions,
+                challengerUser: {
+                  id: challengerUser.id,
+                  username: challengerUser.username,
+                  displayName: challengerUser.displayName,
+                  avatarUrl: challengerUser.avatarUrl,
+                },
+                challengeeUser: {
+                  id: challengeeUser.id,
+                  username: challengeeUser.username,
+                  displayName: challengeeUser.displayName,
+                  avatarUrl: challengeeUser.avatarUrl,
+                },
+                challengerPost: challengerPost,
+                challengeePost: challengeePost,
+              })
+              .from(competitions)
+              .innerJoin(challengerUser, eq(competitions.challengerId, challengerUser.id))
+              .innerJoin(challengeeUser, eq(competitions.challengeeId, challengeeUser.id))
+              .leftJoin(challengerPost, eq(competitions.challengerPostId, challengerPost.id))
+              .leftJoin(challengeePost, eq(competitions.challengeePostId, challengeePost.id))
+              .where(
+                or(
+                  eq(competitions.status, "active"),
+                  and(eq(competitions.status, "pending"), isNotNull(competitions.challengerPostId))
+                )
+              )
+              .orderBy(desc(competitions.createdAt))
+              .limit(10)
+          : Promise.resolve([]),
+      ]);
 
-        return {
-          type: "competition",
-          competition: comp,
-          challengerUser: cUser,
-          challengeeUser: eUser,
-          challengerPost,
-          challengeePost,
-        };
+      // Determine pagination
+      const hasMore = regularPosts.length > limit;
+      const pagePosts = hasMore ? regularPosts.slice(0, limit) : regularPosts;
+      const nextCursor = hasMore ? pagePosts[pagePosts.length - 1].post.createdAt.toISOString() : null;
+
+      const enrichedComps = compsRaw.map((row) => ({
+        type: "competition",
+        competition: row.competition,
+        challengerUser: row.challengerUser,
+        challengeeUser: row.challengeeUser,
+        challengerPost: row.challengerPost ?? null,
+        challengeePost: row.challengeePost ?? null,
       }));
+
+      // Store raw (URL-neutral) data in cache for first page
+      if (isFirstPage) {
+        setFeedCache(cacheKey, { posts: pagePosts, competitions: enrichedComps, nextCursor });
+      }
 
       const rewritePost = (post: any) => {
         if (!post) return post;
@@ -644,7 +728,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       const rewriteUser = (user: any) => user ? { ...user, avatarUrl: rewriteImageUrl(user.avatarUrl, req) } : user;
 
-      const rewrittenPosts = regularPosts.map((row) => ({ post: rewritePost(row.post), user: rewriteUser(row.user) }));
+      const rewrittenPosts = pagePosts.map((row) => ({ post: rewritePost(row.post), user: rewriteUser(row.user) }));
       const rewrittenComps = enrichedComps.map((c) => ({
         ...c,
         challengerUser: rewriteUser(c.challengerUser),
@@ -653,7 +737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         challengeePost: rewritePost(c.challengeePost),
       }));
 
-      res.json({ posts: rewrittenPosts, competitions: rewrittenComps });
+      res.json({ posts: rewrittenPosts, competitions: rewrittenComps, nextCursor });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -691,7 +775,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/posts", async (req: Request, res: Response) => {
     try {
       const { userId, facePhotoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic, postType } = req.body;
-      // If facePhotoUrl is a base64 data URL, save to file
       let photoUrl = facePhotoUrl;
       if (photoUrl && photoUrl.startsWith("data:")) {
         const b64 = photoUrl.split(",")[1];
@@ -701,6 +784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .insert(posts)
         .values({ userId, facePhotoUrl: photoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic, postType: postType || "cutmatch" })
         .returning();
+      invalidateFeedCache();
       res.status(201).json(post);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -821,6 +905,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [comp] = await db.insert(competitions)
         .values({ challengerId, challengeeId, status: "pending", expiresAt })
         .returning();
+      invalidateFeedCache();
       res.status(201).json(comp);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
