@@ -191,32 +191,46 @@ async function analyzeFace(imageBase64: string): Promise<FaceAnalysis> {
 {"faceShape":"oval|round|square|heart|oblong|diamond","faceFeatures":"brief 1-2 sentence description","hasGlasses":false,"hairColor":"color description","skinTone":"fair|light|medium|olive|tan|dark brown|deep","gender":"man|woman|person","ageRange":"teens|20s|30s|40s|50s+","recommendations":[{"rank":1,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description for image generation"},{"rank":2,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"},{"rank":3,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"},{"rank":4,"name":"Haircut Name","description":"One sentence description","whyItFits":"1-2 sentences explaining fit","difficulty":"Easy|Medium|Hard","imagePrompt":"detailed hairstyle description"}]}
 Return exactly 4 recommendations. Output ONLY the JSON object.`;
 
-  const makeRequest = (model: string) => getGroq().chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: imageUrl } },
-          { type: "text", text: "Analyze this face and return the JSON with exactly 4 haircut recommendations." },
-        ] as any,
-      },
-    ],
-    max_tokens: 2000,
-  });
+  const jsonModeModels = new Set(["meta-llama/llama-4-scout-17b-16e-instruct"]);
+
+  const makeRequest = (model: string, jsonMode: boolean) => {
+    const params: Parameters<ReturnType<typeof getGroq>["chat"]["completions"]["create"]>[0] = {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: imageUrl } },
+            { type: "text", text: "Analyze this face and return the JSON with exactly 4 haircut recommendations." },
+          ] as any,
+        },
+      ],
+      max_tokens: 3500,
+    };
+    if (jsonMode) {
+      (params as Record<string, unknown>)["response_format"] = { type: "json_object" };
+    }
+    return getGroq().chat.completions.create(params);
+  };
 
   const visionModels = [
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.2-90b-vision-preview",
   ];
   let lastError: Error | null = null;
   for (const model of visionModels) {
     try {
-      const response = await makeRequest(model);
+      const response = await makeRequest(model, jsonModeModels.has(model));
       const content = response.choices[0]?.message?.content || "";
       if (!content) throw new Error("Empty AI response");
-      const analysis = extractJson(content);
+      let analysis: FaceAnalysis;
+      try {
+        analysis = extractJson(content);
+      } catch (parseErr: any) {
+        console.error(`analyzeFace JSON parse error with model ${model}. Raw content:`, content);
+        throw parseErr;
+      }
       if (!analysis.recommendations || analysis.recommendations.length === 0) {
         throw new Error("No recommendations in AI response");
       }
