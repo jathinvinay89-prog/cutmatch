@@ -95,12 +95,40 @@ Include exactly 4 recommendations. Be concise and fast.`,
   return JSON.parse(match[0]);
 }
 
-function generateHaircutImage(analysis: FaceAnalysis, rec: HaircutRec): string {
+function buildPollinationsUrl(analysis: FaceAnalysis, rec: HaircutRec): string {
   const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
   const prompt = `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`;
   const encoded = encodeURIComponent(prompt.slice(0, 500));
   const seed = Math.floor(Math.random() * 999999);
   return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
+}
+
+async function fetchAndSaveImage(pollinationsUrl: string, rank: number): Promise<string | null> {
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const delay = attempt * 3000;
+      console.log(`Rank ${rank}: retry #${attempt} in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    try {
+      const res = await fetch(pollinationsUrl, {
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*" },
+        signal: AbortSignal.timeout(45000),
+      });
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        const saved = saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
+        console.log(`Rank ${rank}: saved to ${saved}`);
+        return saved;
+      }
+      console.log(`Rank ${rank}: attempt ${attempt + 1} got ${res.status}`);
+      if (res.status !== 429 && res.status !== 503) break;
+    } catch (err: any) {
+      console.log(`Rank ${rank}: attempt ${attempt + 1} error: ${err?.message}`);
+    }
+  }
+  return null;
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -172,11 +200,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = analysis.recommendations.map((rec) => ({
-        rank: rec.rank, name: rec.name, description: rec.description,
-        whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-        generatedImage: generateHaircutImage(analysis, rec),
-      }));
+      const recsWithImages = [];
+      for (const rec of analysis.recommendations) {
+        const pollinationsUrl = buildPollinationsUrl(analysis, rec);
+        const savedUrl = await fetchAndSaveImage(pollinationsUrl, rec.rank);
+        recsWithImages.push({
+          rank: rec.rank, name: rec.name, description: rec.description,
+          whyItFits: rec.whyItFits, difficulty: rec.difficulty,
+          generatedImage: savedUrl ?? pollinationsUrl,
+        });
+      }
 
       res.json({
         faceShape: analysis.faceShape,
@@ -265,7 +298,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       send("status", { message: "Generating your AI looks..." });
 
       for (const rec of analysis.recommendations) {
-        send("image", { rank: rec.rank, generatedImage: generateHaircutImage(analysis, rec) });
+        const pollinationsUrl = buildPollinationsUrl(analysis, rec);
+        const savedUrl = await fetchAndSaveImage(pollinationsUrl, rec.rank);
+        send("image", { rank: rec.rank, generatedImage: savedUrl ?? pollinationsUrl });
       }
 
       send("done", {});
