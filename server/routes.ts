@@ -27,13 +27,29 @@ function saveImageFile(base64Data: string, ext = "png"): string {
   const filename = `${crypto.randomUUID()}.${ext}`;
   const buf = Buffer.from(base64Data, "base64");
   fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
-  return `${getServerBase()}/uploads/${filename}`;
+  return `/uploads/${filename}`;
+}
+
+function rewriteImageUrl(url: string | null | undefined, req: Request): string | null | undefined {
+  if (!url) return url;
+  if (url.startsWith("/")) {
+    return `${req.protocol}://${req.get("host")}${url}`;
+  }
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    try {
+      const parsed = new URL(url);
+      return `${req.protocol}://${req.get("host")}${parsed.pathname}${parsed.search}`;
+    } catch {
+      return url;
+    }
+  }
+  return url;
 }
 
 function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
   const filename = `${crypto.randomUUID()}.${ext}`;
   fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
-  return `${getServerBase()}/uploads/${filename}`;
+  return `/uploads/${filename}`;
 }
 
 // ── GROQ AI (free, ultra-fast inference) ─────────────────────────────────────
@@ -277,7 +293,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { image } = req.body;
       if (!image) return res.status(400).json({ error: "image required" });
       const b64 = image.includes(",") ? image.split(",")[1] : image;
-      const url = saveImageFile(b64, "jpg");
+      const relativePath = saveImageFile(b64, "jpg");
+      const url = rewriteImageUrl(relativePath, req);
       res.json({ url });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -298,7 +315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return {
             rank: rec.rank, name: rec.name, description: rec.description,
             whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-            generatedImage: imageUrl,
+            generatedImage: rewriteImageUrl(imageUrl, req),
           };
         })
       );
@@ -393,7 +410,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         analysis.recommendations.map(async (rec) => {
           try {
             const imageUrl = await generateImageUrl(analysis, rec);
-            send("image", { rank: rec.rank, generatedImage: imageUrl });
+            send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(imageUrl, req) });
           } catch (imgErr: any) {
             console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
             send("image", { rank: rec.rank, generatedImage: null });
@@ -513,7 +530,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       }));
 
-      res.json({ posts: regularPosts, competitions: enrichedComps });
+      const rewritePost = (post: any) => {
+        if (!post) return post;
+        const recs = Array.isArray(post.recommendations)
+          ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
+          : post.recommendations;
+        return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+      };
+      const rewriteUser = (user: any) => user ? { ...user, avatarUrl: rewriteImageUrl(user.avatarUrl, req) } : user;
+
+      const rewrittenPosts = regularPosts.map((row) => ({ post: rewritePost(row.post), user: rewriteUser(row.user) }));
+      const rewrittenComps = enrichedComps.map((c) => ({
+        ...c,
+        challengerUser: rewriteUser(c.challengerUser),
+        challengeeUser: rewriteUser(c.challengeeUser),
+        challengerPost: rewritePost(c.challengerPost),
+        challengeePost: rewritePost(c.challengeePost),
+      }));
+
+      res.json({ posts: rewrittenPosts, competitions: rewrittenComps });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -524,7 +559,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(posts).innerJoin(users, eq(posts.userId, users.id))
         .where(eq(posts.id, parseInt(req.params.id)));
       if (!row) return res.status(404).json({ error: "Not found" });
-      res.json(row);
+      const recs = Array.isArray(row.post.recommendations)
+        ? row.post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
+        : row.post.recommendations;
+      res.json({
+        post: { ...row.post, facePhotoUrl: rewriteImageUrl(row.post.facePhotoUrl, req), recommendations: recs },
+        user: { ...row.user, avatarUrl: rewriteImageUrl(row.user.avatarUrl, req) },
+      });
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
@@ -532,7 +573,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = parseInt(req.params.id);
       const userPosts = await db.select().from(posts).where(eq(posts.userId, userId)).orderBy(desc(posts.createdAt)).limit(20);
-      res.json(userPosts);
+      const rewritten = userPosts.map((post) => {
+        const recs = Array.isArray(post.recommendations)
+          ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
+          : post.recommendations;
+        return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+      });
+      res.json(rewritten);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 

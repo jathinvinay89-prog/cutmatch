@@ -59,6 +59,42 @@ function AvatarCircle({ name, size = 40, avatarUrl }: { name: string; size?: num
   );
 }
 
+function ImageWithFallback({ uri, style, contentFit = "cover", fallbackSize = 16, borderColor = "#333" }: {
+  uri?: string | null; style: any; contentFit?: any; fallbackSize?: number; borderColor?: string;
+}) {
+  const [errored, setErrored] = useState(false);
+  useEffect(() => { setErrored(false); }, [uri]);
+  if (!uri || errored) {
+    return (
+      <View style={[style, { alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor }]}>
+        <Ionicons name="image-outline" size={fallbackSize} color={borderColor} />
+      </View>
+    );
+  }
+  return (
+    <Image
+      source={{ uri }}
+      style={style}
+      contentFit={contentFit}
+      cachePolicy="memory-disk"
+      onError={() => setErrored(true)}
+    />
+  );
+}
+
+function FaceImage({ uri, style, borderColor }: { uri?: string | null; style: any; borderColor: string }) {
+  return <ImageWithFallback uri={uri} style={style} fallbackSize={18} borderColor={borderColor} />;
+}
+function RecThumbImage({ uri, style, borderColor }: { uri?: string | null; style: any; borderColor: string }) {
+  return <ImageWithFallback uri={uri} style={style} fallbackSize={12} borderColor={borderColor} />;
+}
+function RecModalImage({ uri, style, borderColor }: { uri?: string | null; style: any; borderColor: string }) {
+  return <ImageWithFallback uri={uri} style={style} fallbackSize={20} borderColor={borderColor} />;
+}
+function CompBannerImage({ uri, style, borderColor }: { uri?: string | null; style: any; borderColor: string }) {
+  return <ImageWithFallback uri={uri} style={style} fallbackSize={20} borderColor={borderColor} />;
+}
+
 function FilterPills({ active, onChange, colors: C }: { active: FeedFilter; onChange: (f: FeedFilter) => void; colors: any }) {
   const filters: { key: FeedFilter; label: string }[] = [
     { key: "all", label: "All" },
@@ -172,7 +208,7 @@ function RecsModal({ post, user, visible, onClose, currentUserId, apiBase, color
                 >
                   <View style={rS.recImgBox}>
                     {rec.generatedImage
-                      ? <Image source={{ uri: rec.generatedImage }} style={rS.recImg} contentFit="cover" />
+                      ? <RecModalImage uri={rec.generatedImage} style={rS.recImg} borderColor={C.border} />
                       : <View style={[rS.recImgPlaceholder, { backgroundColor: C.surface }]}><Ionicons name="cut-outline" size={20} color={C.border} /></View>}
                   </View>
                   <View style={rS.recInfo}>
@@ -273,9 +309,9 @@ function CompetitionBanner({ item, colors: C }: { item: any; colors: any }) {
             <Text style={[bS.sideName, { color: C.text }]} numberOfLines={1}>{side.user?.displayName || "Waiting..."}</Text>
             <View style={[bS.sideImgBox, { backgroundColor: C.surface2 }]}>
               {side.rec?.generatedImage
-                ? <Image source={{ uri: side.rec.generatedImage }} style={bS.sideImg} contentFit="cover" />
+                ? <CompBannerImage uri={side.rec.generatedImage} style={bS.sideImg} borderColor={C.border} />
                 : side.post?.facePhotoUrl
-                  ? <Image source={{ uri: side.post.facePhotoUrl }} style={bS.sideImg} contentFit="cover" />
+                  ? <CompBannerImage uri={side.post.facePhotoUrl} style={bS.sideImg} borderColor={C.border} />
                   : <View style={[bS.sideImgEmpty, { backgroundColor: C.surface2 }]}><Ionicons name="cut-outline" size={20} color={C.border} /></View>}
             </View>
             {side.rec && <Text style={[bS.cutName, { color: C.textSecondary }]} numberOfLines={1}>{side.rec.name}</Text>}
@@ -351,14 +387,14 @@ function PostCard({ item, currentUserId, apiBase, colors: C, compact, showCaptio
 
         <View style={fS.photoRow}>
           <View style={[fS.faceBox, { backgroundColor: C.surface2 }]}>
-            <Image source={{ uri: item.post.facePhotoUrl }} style={fS.faceImg} contentFit="cover" cachePolicy="memory-disk" />
+            <FaceImage uri={item.post.facePhotoUrl} style={fS.faceImg} borderColor={C.border} />
             <View style={fS.faceLabel}><Text style={fS.faceLabelText}>Original</Text></View>
           </View>
           <View style={fS.recsGrid}>
             {recs.slice(0, 4).map((rec: any) => (
               <View key={rec.rank} style={[fS.recThumb, { backgroundColor: C.surface2 }]}>
                 {rec.generatedImage
-                  ? <Image source={{ uri: rec.generatedImage }} style={fS.recThumbImg} contentFit="cover" cachePolicy="memory-disk" />
+                  ? <RecThumbImage uri={rec.generatedImage} style={fS.recThumbImg} borderColor={C.border} />
                   : <View style={[fS.recThumbPlaceholder, { backgroundColor: C.surface2 }]}><Ionicons name="cut-outline" size={12} color={C.border} /></View>}
                 <View style={[fS.rankDot, { backgroundColor: [C.rank1, C.rank2, C.rank3, C.rank4][rec.rank - 1] }]} />
               </View>
