@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -23,6 +23,8 @@ import { fetch } from "expo/fetch";
 
 const Haptics = Platform.OS !== "web" ? require("expo-haptics") : null;
 const TAB_BAR_HEIGHT = Platform.OS === "ios" ? 49 : Platform.OS === "android" ? 56 : 84;
+
+type FeedFilter = "all" | "posts" | "competitions";
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -57,6 +59,53 @@ function AvatarCircle({ name, size = 40, avatarUrl }: { name: string; size?: num
   );
 }
 
+function FilterPills({ active, onChange, colors: C }: { active: FeedFilter; onChange: (f: FeedFilter) => void; colors: any }) {
+  const filters: { key: FeedFilter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "competitions", label: "Competitions" },
+    { key: "posts", label: "Posts" },
+  ];
+  const pillScales = useRef(filters.map(() => new Animated.Value(1))).current;
+
+  const handlePress = (key: FeedFilter, idx: number) => {
+    Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyle?.Light);
+    Animated.sequence([
+      Animated.spring(pillScales[idx], { toValue: 0.88, useNativeDriver: true, speed: 60, bounciness: 2 }),
+      Animated.spring(pillScales[idx], { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 10 }),
+    ]).start();
+    onChange(key);
+  };
+
+  return (
+    <View style={fpS.row}>
+      {filters.map((f, i) => {
+        const isActive = active === f.key;
+        return (
+          <Animated.View key={f.key} style={{ transform: [{ scale: pillScales[i] }] }}>
+            <Pressable
+              style={[
+                fpS.pill,
+                isActive
+                  ? { backgroundColor: C.gold, borderColor: C.gold }
+                  : { backgroundColor: "transparent", borderColor: C.border },
+              ]}
+              onPress={() => handlePress(f.key, i)}
+            >
+              <Text style={[fpS.pillText, { color: isActive ? "#0A0A0A" : C.textSecondary }]}>{f.label}</Text>
+            </Pressable>
+          </Animated.View>
+        );
+      })}
+    </View>
+  );
+}
+
+const fpS = StyleSheet.create({
+  row: { flexDirection: "row", gap: 8, paddingHorizontal: 16, paddingBottom: 10, paddingTop: 6 },
+  pill: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
+  pillText: { fontSize: 13, fontFamily: "DMSans_500Medium" },
+});
+
 function RecsModal({ post, user, visible, onClose, currentUserId, apiBase, colors: C }: any) {
   const qc = useQueryClient();
   const [userRank, setUserRank] = useState<number | null>(null);
@@ -79,20 +128,13 @@ function RecsModal({ post, user, visible, onClose, currentUserId, apiBase, color
 
   const addFriend = useCallback(async () => {
     if (!currentUserId || user.id === currentUserId || friendAdded) return;
-
     Haptics?.notificationAsync?.(Haptics.NotificationFeedbackType?.Success);
-
     Animated.sequence([
       Animated.spring(scaleAnim, { toValue: 1.08, useNativeDriver: true, speed: 40, bounciness: 12 }),
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 6 }),
     ]).start();
-
     setFriendAdded(true);
-
-    Animated.spring(checkScaleAnim, {
-      toValue: 1, useNativeDriver: true, speed: 14, bounciness: 18, delay: 80,
-    }).start();
-
+    Animated.spring(checkScaleAnim, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 18, delay: 80 }).start();
     try {
       const url = new URL("/api/friends/request", apiBase).toString();
       await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requesterId: currentUserId, addresseeId: user.id }) });
@@ -186,21 +228,30 @@ function CompetitionBanner({ item, colors: C }: { item: any; colors: any }) {
   const challRec = item.challengerPost?.recommendations?.find((r: any) => r.rank === 1) || item.challengerPost?.recommendations?.[0];
   const challeRec = item.challengeePost?.recommendations?.find((r: any) => r.rank === 1) || item.challengeePost?.recommendations?.[0];
   const comp = item.competition;
+  const isLive = comp.status === "active";
   const totalVotes = (comp.challengerVotes ?? 0) + (comp.challengeeVotes ?? 0);
   const cPct = totalVotes > 0 ? Math.round(((comp.challengerVotes ?? 0) / totalVotes) * 100) : 50;
   const ePct = 100 - cPct;
 
   return (
     <Pressable
-      style={[bS.banner, { backgroundColor: C.surface, borderColor: C.gold + "50" }]}
+      style={[bS.banner, { backgroundColor: C.surface, borderColor: isLive ? C.gold + "70" : C.border }]}
       onPress={() => router.push({ pathname: "/competition/[id]", params: { id: String(comp.id) } } as any)}
     >
-      <LinearGradient colors={[C.gold + "18", "transparent"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} />
+      <LinearGradient colors={isLive ? [C.gold + "22", "transparent"] : ["transparent", "transparent"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} />
 
       <View style={bS.bannerTop}>
-        <View style={[bS.competitionTag, { backgroundColor: C.gold + "20", borderColor: C.gold + "50" }]}>
-          <Ionicons name="trophy" size={12} color={C.gold} />
-          <Text style={[bS.competitionTagText, { color: C.gold }]}>⚔️ CutCompetition</Text>
+        <View style={bS.badgeRow}>
+          {isLive && (
+            <View style={[bS.liveBadge, { backgroundColor: "#FF3B30" }]}>
+              <View style={bS.liveDot} />
+              <Text style={bS.liveText}>LIVE</Text>
+            </View>
+          )}
+          <View style={[bS.competitionTag, { backgroundColor: C.gold + "18", borderColor: C.gold + "40" }]}>
+            <Ionicons name="trophy" size={11} color={C.gold} />
+            <Text style={[bS.competitionTagText, { color: C.gold }]}>CutCompetition</Text>
+          </View>
         </View>
         {comp.expiresAt && (
           <View style={[bS.timerTag, { backgroundColor: C.surface2, borderColor: C.border }]}>
@@ -218,14 +269,14 @@ function CompetitionBanner({ item, colors: C }: { item: any; colors: any }) {
           { user: item.challengeeUser, post: item.challengeePost, rec: challeRec, votes: comp.challengeeVotes ?? 0, pct: ePct },
         ].map((side, i) => (
           <View key={i} style={bS.side}>
-            <AvatarCircle name={side.user?.displayName || "?"} size={28} avatarUrl={side.user?.avatarUrl} />
+            <AvatarCircle name={side.user?.displayName || "?"} size={26} avatarUrl={side.user?.avatarUrl} />
             <Text style={[bS.sideName, { color: C.text }]} numberOfLines={1}>{side.user?.displayName || "Waiting..."}</Text>
             <View style={[bS.sideImgBox, { backgroundColor: C.surface2 }]}>
               {side.rec?.generatedImage
                 ? <Image source={{ uri: side.rec.generatedImage }} style={bS.sideImg} contentFit="cover" />
                 : side.post?.facePhotoUrl
                   ? <Image source={{ uri: side.post.facePhotoUrl }} style={bS.sideImg} contentFit="cover" />
-                  : <View style={[bS.sideImgEmpty, { backgroundColor: C.surface2 }]}><Ionicons name="cut-outline" size={22} color={C.border} /></View>}
+                  : <View style={[bS.sideImgEmpty, { backgroundColor: C.surface2 }]}><Ionicons name="cut-outline" size={20} color={C.border} /></View>}
             </View>
             {side.rec && <Text style={[bS.cutName, { color: C.textSecondary }]} numberOfLines={1}>{side.rec.name}</Text>}
             <View style={[bS.voteBar, { backgroundColor: C.border }]}>
@@ -234,33 +285,66 @@ function CompetitionBanner({ item, colors: C }: { item: any; colors: any }) {
             <Text style={[bS.votePct, { color: C.gold }]}>{side.pct}%</Text>
           </View>
         ))}
-        <View style={[bS.vsCircle, { backgroundColor: C.gold, position: "absolute", left: "50%", top: "50%", marginLeft: -16, marginTop: -16 }]}>
+        <View style={[bS.vsCircle, { backgroundColor: C.gold, position: "absolute", left: "50%", top: "50%", marginLeft: -15, marginTop: -15 }]}>
           <Text style={[bS.vsText, { color: "#0A0A0A" }]}>VS</Text>
         </View>
       </View>
 
       <View style={[bS.tapToVote, { backgroundColor: C.gold }]}>
         <Text style={[bS.tapToVoteText, { color: "#0A0A0A" }]}>Tap to vote</Text>
-        <Ionicons name="arrow-forward" size={14} color="#0A0A0A" />
+        <Ionicons name="arrow-forward" size={13} color="#0A0A0A" />
       </View>
     </Pressable>
   );
 }
 
-function PostCard({ item, currentUserId, apiBase, colors: C }: any) {
+function PostCard({ item, currentUserId, apiBase, colors: C, compact, showCaptions }: any) {
   const [modalVisible, setModalVisible] = useState(false);
   const recs = item.post.recommendations || [];
+  const totalRatings = recs.reduce((s: number, r: any) => s + (r.votesCount ?? 0), 0);
+
+  if (compact) {
+    return (
+      <>
+        <Pressable
+          style={[fS.postCardCompact, { backgroundColor: C.surface, borderColor: C.border }]}
+          onPress={() => setModalVisible(true)}
+        >
+          <AvatarCircle name={item.user.displayName} size={34} avatarUrl={item.user.avatarUrl} />
+          <View style={{ flex: 1, gap: 1 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={[fS.postName, { color: C.text, fontSize: 13 }]}>{item.user.displayName}</Text>
+              <View style={[fS.shapeTag, { backgroundColor: C.gold + "18", borderColor: C.gold + "30", paddingHorizontal: 7, paddingVertical: 2 }]}>
+                <Text style={[fS.shapeTagText, { color: C.gold, fontSize: 10 }]}>{item.post.faceShape}</Text>
+              </View>
+            </View>
+            <Text style={[fS.postMeta, { color: C.textSecondary }]}>@{item.user.username} · {timeAgo(item.post.createdAt)}</Text>
+          </View>
+          <View style={fS.compactActions}>
+            <Ionicons name="star-outline" size={14} color={C.textSecondary} />
+            {totalRatings > 0 && <Text style={[fS.ratingCount, { color: C.textSecondary }]}>{totalRatings}</Text>}
+            <Ionicons name="chevron-forward" size={14} color={C.border} style={{ marginLeft: 4 }} />
+          </View>
+        </Pressable>
+        <RecsModal visible={modalVisible} onClose={() => setModalVisible(false)} post={item.post} user={item.user}
+          currentUserId={currentUserId} apiBase={apiBase} colors={C} />
+      </>
+    );
+  }
 
   return (
     <>
-      <Pressable style={[fS.postCard]} onPress={() => setModalVisible(true)}>
+      <Pressable
+        style={[fS.postCard, { backgroundColor: C.surface, borderColor: C.border }]}
+        onPress={() => setModalVisible(true)}
+      >
         <View style={fS.postHeader}>
-          <AvatarCircle name={item.user.displayName} avatarUrl={item.user.avatarUrl} />
+          <AvatarCircle name={item.user.displayName} size={36} avatarUrl={item.user.avatarUrl} />
           <View style={fS.postUserInfo}>
             <Text style={[fS.postName, { color: C.text }]}>{item.user.displayName}</Text>
             <Text style={[fS.postMeta, { color: C.textSecondary }]}>@{item.user.username} · {timeAgo(item.post.createdAt)}</Text>
           </View>
-          <View style={[fS.shapeTag, { backgroundColor: C.gold + "20", borderColor: C.gold + "40" }]}>
+          <View style={[fS.shapeTag, { backgroundColor: C.gold + "18", borderColor: C.gold + "30" }]}>
             <Text style={[fS.shapeTagText, { color: C.gold }]}>{item.post.faceShape}</Text>
           </View>
         </View>
@@ -275,24 +359,27 @@ function PostCard({ item, currentUserId, apiBase, colors: C }: any) {
               <View key={rec.rank} style={[fS.recThumb, { backgroundColor: C.surface2 }]}>
                 {rec.generatedImage
                   ? <Image source={{ uri: rec.generatedImage }} style={fS.recThumbImg} contentFit="cover" cachePolicy="memory-disk" />
-                  : <View style={[fS.recThumbPlaceholder, { backgroundColor: C.surface2 }]}><Ionicons name="cut-outline" size={14} color={C.border} /></View>}
+                  : <View style={[fS.recThumbPlaceholder, { backgroundColor: C.surface2 }]}><Ionicons name="cut-outline" size={12} color={C.border} /></View>}
                 <View style={[fS.rankDot, { backgroundColor: [C.rank1, C.rank2, C.rank3, C.rank4][rec.rank - 1] }]} />
               </View>
             ))}
           </View>
         </View>
 
-        {!!item.post.caption && <Text style={[fS.caption, { color: C.text }]}>{item.post.caption}</Text>}
+        {showCaptions && !!item.post.caption && (
+          <Text style={[fS.caption, { color: C.text }]} numberOfLines={2}>{item.post.caption}</Text>
+        )}
 
         <View style={fS.postFooter}>
-          <Pressable style={fS.footerAction} onPress={() => setModalVisible(true)}>
-            <Ionicons name="star-outline" size={16} color={C.textSecondary} />
+          <View style={fS.footerAction}>
+            <Ionicons name="star-outline" size={14} color={C.textSecondary} />
             <Text style={[fS.footerActionText, { color: C.textSecondary }]}>Rate cuts</Text>
-          </Pressable>
-          <Pressable style={fS.footerAction} onPress={() => setModalVisible(true)}>
-            <Ionicons name="chevron-forward" size={16} color={C.textSecondary} />
+            {totalRatings > 0 && <Text style={[fS.ratingCount, { color: C.textSecondary }]}>{totalRatings}</Text>}
+          </View>
+          <View style={fS.footerAction}>
             <Text style={[fS.footerActionText, { color: C.textSecondary }]}>View all</Text>
-          </Pressable>
+            <Ionicons name="chevron-forward" size={13} color={C.border} />
+          </View>
         </View>
       </Pressable>
 
@@ -302,11 +389,62 @@ function PostCard({ item, currentUserId, apiBase, colors: C }: any) {
   );
 }
 
+function AnimatedFeedList({ feedItems, currentUserId, apiBase, colors: C, compact, showCaptions, bottomPad, onRefresh }: any) {
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const translateAnim = useRef(new Animated.Value(0)).current;
+  const prevItemsRef = useRef(feedItems);
+
+  useEffect(() => {
+    if (prevItemsRef.current === feedItems) return;
+    prevItemsRef.current = feedItems;
+    fadeAnim.setValue(0);
+    translateAnim.setValue(12);
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.spring(translateAnim, { toValue: 0, tension: 80, friction: 14, useNativeDriver: true }),
+    ]).start();
+  }, [feedItems]);
+
+  return (
+    <Animated.View style={{ flex: 1, opacity: fadeAnim, transform: [{ translateY: translateAnim }] }}>
+      <FlatList
+        data={feedItems}
+        keyExtractor={(item, i) => `${item._type}-${item._type === "competition" ? item.competition.id : item.post.id}-${i}`}
+        renderItem={({ item }) => {
+          if (item._type === "competition") {
+            return (
+              <View style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
+                <CompetitionBanner item={item} colors={C} />
+              </View>
+            );
+          }
+          return (
+            <View style={{ paddingHorizontal: 12, paddingVertical: 5 }}>
+              <PostCard
+                item={item}
+                currentUserId={currentUserId}
+                apiBase={apiBase}
+                colors={C}
+                compact={compact}
+                showCaptions={showCaptions}
+              />
+            </View>
+          );
+        }}
+        contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + bottomPad + 16, paddingTop: 4 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} tintColor={C.gold} />}
+      />
+    </Animated.View>
+  );
+}
+
 export default function FeedScreen() {
   const insets = useSafeAreaInsets();
-  const { currentUser, apiBase, colors: C } = useApp();
+  const { currentUser, apiBase, colors: C, settings } = useApp();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+  const [filter, setFilter] = useState<FeedFilter>("all");
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["/api/feed"],
@@ -322,51 +460,52 @@ export default function FeedScreen() {
   const posts = data?.posts ?? [];
   const competitions = data?.competitions ?? [];
 
-  // Merge competitions and posts: active competitions always surface first, then by date
-  const activeComps = competitions.filter((c: any) => c.competition.status === "active");
-  const otherComps = competitions.filter((c: any) => c.competition.status !== "active");
-  const feedItems: any[] = [
-    ...activeComps.map((c: any) => ({ ...c, _type: "competition", _priority: 0, _date: c.competition.createdAt })),
-    ...otherComps.map((c: any) => ({ ...c, _type: "competition", _priority: 1, _date: c.competition.createdAt })),
-    ...posts.map((p: any) => ({ ...p, _type: "post", _priority: 2, _date: p.post.createdAt })),
-  ].sort((a, b) => {
-    if (a._priority !== b._priority) return a._priority - b._priority;
-    return new Date(b._date).getTime() - new Date(a._date).getTime();
-  });
+  const feedItems = useMemo(() => {
+    const activeComps = competitions.filter((c: any) => c.competition.status === "active");
+    const otherComps = competitions.filter((c: any) => c.competition.status !== "active");
+    const allItems: any[] = [
+      ...activeComps.map((c: any) => ({ ...c, _type: "competition", _priority: 0, _date: c.competition.createdAt })),
+      ...otherComps.map((c: any) => ({ ...c, _type: "competition", _priority: 1, _date: c.competition.createdAt })),
+      ...posts.map((p: any) => ({ ...p, _type: "post", _priority: 2, _date: p.post.createdAt })),
+    ].sort((a, b) => {
+      if (a._priority !== b._priority) return a._priority - b._priority;
+      return new Date(b._date).getTime() - new Date(a._date).getTime();
+    });
+    return allItems.filter((item) => {
+      if (filter === "all") return true;
+      if (filter === "competitions") return item._type === "competition";
+      if (filter === "posts") return item._type === "post";
+      return true;
+    });
+  }, [posts, competitions, filter]);
 
   return (
     <View style={[fS.container, { backgroundColor: C.background }]}>
-      <View style={[fS.header, { paddingTop: topPad + 12, borderBottomColor: C.border }]}>
-        <Text style={[fS.headerTitle, { color: C.text }]}>Feed</Text>
-        <Text style={[fS.headerSub, { color: C.textSecondary }]}>Haircuts from the community</Text>
+      <View style={[fS.header, { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+        <View style={fS.headerRow}>
+          <Text style={[fS.headerTitle, { color: C.text }]}>Feed</Text>
+        </View>
+        <FilterPills active={filter} onChange={setFilter} colors={C} />
       </View>
 
       {isLoading ? (
         <View style={fS.center}><ActivityIndicator color={C.gold} size="large" /></View>
       ) : feedItems.length === 0 ? (
         <View style={fS.center}>
-          <Ionicons name="images-outline" size={52} color={C.border} />
-          <Text style={[fS.emptyTitle, { color: C.text }]}>No posts yet</Text>
+          <Ionicons name="images-outline" size={48} color={C.border} />
+          <Text style={[fS.emptyTitle, { color: C.text }]}>Nothing here yet</Text>
           <Text style={[fS.emptyText, { color: C.textSecondary }]}>Share your CutMatch results to appear here</Text>
         </View>
       ) : (
-        <FlatList
-          data={feedItems}
-          keyExtractor={(item, i) => `${item._type}-${item._type === "competition" ? item.competition.id : item.post.id}-${i}`}
-          renderItem={({ item }) => {
-            if (item._type === "competition") {
-              return (
-                <View style={{ paddingHorizontal: 12, paddingVertical: 8 }}>
-                  <CompetitionBanner item={item} colors={C} />
-                </View>
-              );
-            }
-            return <PostCard item={item} currentUserId={currentUser?.id ?? null} apiBase={apiBase} colors={C} />;
-          }}
-          contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + bottomPad + 16, paddingTop: 8 }}
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={false} onRefresh={refetch} tintColor={C.gold} />}
-          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: C.border, marginHorizontal: 16 }} />}
+        <AnimatedFeedList
+          feedItems={feedItems}
+          currentUserId={currentUser?.id ?? null}
+          apiBase={apiBase}
+          colors={C}
+          compact={settings.compactFeedMode}
+          showCaptions={settings.showCaptions}
+          bottomPad={bottomPad}
+          onRefresh={refetch}
         />
       )}
     </View>
@@ -375,57 +514,71 @@ export default function FeedScreen() {
 
 const fS = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingHorizontal: 20, paddingBottom: 10, borderBottomWidth: 1 },
-  headerTitle: { fontSize: 26, fontFamily: "DMSans_700Bold" },
-  headerSub: { fontSize: 12, fontFamily: "DMSans_400Regular", marginTop: 2 },
+  header: { borderBottomWidth: 1 },
+  headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 4 },
+  headerTitle: { fontSize: 24, fontFamily: "DMSans_700Bold", letterSpacing: -0.3 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   emptyTitle: { fontSize: 17, fontFamily: "DMSans_700Bold" },
   emptyText: { fontSize: 13, fontFamily: "DMSans_400Regular", textAlign: "center", paddingHorizontal: 40 },
-  postCard: { paddingHorizontal: 16, paddingVertical: 16, gap: 12 },
+  postCard: {
+    borderRadius: 16, borderWidth: 1, overflow: "hidden",
+    paddingHorizontal: 14, paddingVertical: 12, gap: 10,
+  },
+  postCardCompact: {
+    borderRadius: 14, borderWidth: 1, overflow: "hidden",
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 14, paddingVertical: 11,
+  },
   postHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
   postUserInfo: { flex: 1 },
-  postName: { fontSize: 14, fontFamily: "DMSans_700Bold" },
+  postName: { fontSize: 13, fontFamily: "DMSans_700Bold" },
   postMeta: { fontSize: 11, fontFamily: "DMSans_400Regular", marginTop: 1 },
-  shapeTag: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1 },
+  shapeTag: { borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3, borderWidth: 1 },
   shapeTagText: { fontSize: 11, fontFamily: "DMSans_500Medium", textTransform: "capitalize" },
-  photoRow: { flexDirection: "row", gap: 8, height: 160 },
-  faceBox: { flex: 1, borderRadius: 12, overflow: "hidden", position: "relative" },
+  photoRow: { flexDirection: "row", gap: 6, height: 136 },
+  faceBox: { flex: 1, borderRadius: 10, overflow: "hidden", position: "relative" },
   faceImg: { width: "100%", height: "100%" },
-  faceLabel: { position: "absolute", bottom: 6, left: 6, backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  faceLabelText: { fontSize: 10, fontFamily: "DMSans_500Medium", color: "#fff" },
-  recsGrid: { flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  recThumb: { width: "48%", aspectRatio: 1, borderRadius: 10, overflow: "hidden", position: "relative" },
+  faceLabel: { position: "absolute", bottom: 5, left: 5, backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2 },
+  faceLabelText: { fontSize: 9, fontFamily: "DMSans_500Medium", color: "#fff" },
+  recsGrid: { flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 3 },
+  recThumb: { width: "48%", aspectRatio: 1, borderRadius: 8, overflow: "hidden", position: "relative" },
   recThumbImg: { width: "100%", height: "100%" },
   recThumbPlaceholder: { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
-  rankDot: { position: "absolute", top: 5, right: 5, width: 8, height: 8, borderRadius: 4, borderWidth: 1, borderColor: "rgba(0,0,0,0.3)" },
-  caption: { fontSize: 13, fontFamily: "DMSans_400Regular", lineHeight: 18 },
-  postFooter: { flexDirection: "row", justifyContent: "space-between" },
-  footerAction: { flexDirection: "row", alignItems: "center", gap: 5 },
-  footerActionText: { fontSize: 12, fontFamily: "DMSans_500Medium" },
+  rankDot: { position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: 3.5, borderWidth: 1, borderColor: "rgba(0,0,0,0.3)" },
+  caption: { fontSize: 12, fontFamily: "DMSans_400Regular", lineHeight: 17 },
+  postFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  footerAction: { flexDirection: "row", alignItems: "center", gap: 4 },
+  footerActionText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
+  ratingCount: { fontSize: 11, fontFamily: "DMSans_500Medium" },
+  compactActions: { flexDirection: "row", alignItems: "center", gap: 3 },
 });
 
 const bS = StyleSheet.create({
-  banner: { borderRadius: 20, borderWidth: 1.5, overflow: "hidden", padding: 16, gap: 12 },
+  banner: { borderRadius: 16, borderWidth: 1.5, overflow: "hidden", padding: 14, gap: 10 },
   bannerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  competitionTag: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, borderWidth: 1 },
-  competitionTagText: { fontSize: 12, fontFamily: "DMSans_700Bold" },
+  badgeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  liveBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+  liveDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: "#fff" },
+  liveText: { fontSize: 10, fontFamily: "DMSans_700Bold", color: "#fff", letterSpacing: 0.5 },
+  competitionTag: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, borderWidth: 1 },
+  competitionTagText: { fontSize: 11, fontFamily: "DMSans_700Bold" },
   timerTag: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 1 },
   timerText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
-  vsTitle: { fontSize: 18, fontFamily: "DMSans_700Bold", textAlign: "center" },
+  vsTitle: { fontSize: 15, fontFamily: "DMSans_700Bold", textAlign: "center" },
   competitors: { flexDirection: "row", gap: 0, position: "relative" },
-  side: { flex: 1, alignItems: "center", gap: 6 },
-  sideName: { fontSize: 13, fontFamily: "DMSans_700Bold", textAlign: "center" },
-  sideImgBox: { width: "90%", aspectRatio: 0.9, borderRadius: 14, overflow: "hidden" },
+  side: { flex: 1, alignItems: "center", gap: 5 },
+  sideName: { fontSize: 12, fontFamily: "DMSans_700Bold", textAlign: "center" },
+  sideImgBox: { width: "88%", aspectRatio: 0.9, borderRadius: 12, overflow: "hidden" },
   sideImg: { width: "100%", height: "100%" },
   sideImgEmpty: { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
-  cutName: { fontSize: 11, fontFamily: "DMSans_500Medium", textAlign: "center" },
-  voteBar: { width: "85%", height: 4, borderRadius: 2, overflow: "hidden" },
-  voteBarFill: { height: "100%", borderRadius: 2 },
-  votePct: { fontSize: 13, fontFamily: "DMSans_700Bold" },
-  vsCircle: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", zIndex: 10 },
-  vsText: { fontSize: 11, fontFamily: "DMSans_700Bold" },
-  tapToVote: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 11, borderRadius: 12 },
-  tapToVoteText: { fontSize: 14, fontFamily: "DMSans_700Bold" },
+  cutName: { fontSize: 10, fontFamily: "DMSans_500Medium", textAlign: "center" },
+  voteBar: { width: "85%", height: 3, borderRadius: 1.5, overflow: "hidden" },
+  voteBarFill: { height: "100%", borderRadius: 1.5 },
+  votePct: { fontSize: 12, fontFamily: "DMSans_700Bold" },
+  vsCircle: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", zIndex: 10 },
+  vsText: { fontSize: 10, fontFamily: "DMSans_700Bold" },
+  tapToVote: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 9, borderRadius: 10 },
+  tapToVoteText: { fontSize: 13, fontFamily: "DMSans_700Bold" },
 });
 
 const rS = StyleSheet.create({
@@ -438,9 +591,9 @@ const rS = StyleSheet.create({
   sheetShape: { fontSize: 12, fontFamily: "DMSans_400Regular", textTransform: "capitalize", marginTop: 1 },
   closeBtn: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   scroll: { padding: 16, gap: 10 },
-  voteLabel: { fontSize: 13, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
-  recCard: { flexDirection: "row", borderRadius: 16, borderWidth: 1, padding: 12, gap: 12, alignItems: "center" },
-  recImgBox: { width: 72, height: 88, borderRadius: 10, overflow: "hidden" },
+  voteLabel: { fontSize: 12, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
+  recCard: { flexDirection: "row", borderRadius: 14, borderWidth: 1, padding: 11, gap: 12, alignItems: "center" },
+  recImgBox: { width: 68, height: 84, borderRadius: 10, overflow: "hidden" },
   recImg: { width: "100%", height: "100%" },
   recImgPlaceholder: { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
   recInfo: { flex: 1, gap: 4 },
@@ -449,9 +602,9 @@ const rS = StyleSheet.create({
   recName: { fontSize: 14, fontFamily: "DMSans_700Bold" },
   recDesc: { fontSize: 11, fontFamily: "DMSans_400Regular" },
   diffRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  diffDot: { width: 5, height: 5, borderRadius: 3 },
-  diffText: { fontSize: 10, fontFamily: "DMSans_500Medium" },
-  voteCheck: { position: "absolute", top: 10, right: 10 },
+  diffDot: { width: 6, height: 6, borderRadius: 3 },
+  diffText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
+  voteCheck: { marginLeft: "auto" },
   friendBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 13, borderRadius: 14, borderWidth: 1, marginTop: 4 },
-  friendBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium" },
+  friendBtnText: { fontSize: 14, fontFamily: "DMSans_700Bold" },
 });

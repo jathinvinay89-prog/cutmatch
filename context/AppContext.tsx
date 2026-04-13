@@ -24,6 +24,12 @@ export interface AppSettings {
   showFaceShape: boolean;
   showDifficulty: boolean;
   enableHaptics: boolean;
+  compactFeedMode: boolean;
+  showCaptions: boolean;
+  publicPosts: boolean;
+  preferredHairLength: "Short" | "Medium" | "Long";
+  pushNotifications: boolean;
+  competitionAlerts: boolean;
 }
 
 export interface AIAdvisorMessage {
@@ -37,6 +43,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   showFaceShape: true,
   showDifficulty: true,
   enableHaptics: true,
+  compactFeedMode: false,
+  showCaptions: true,
+  publicPosts: true,
+  preferredHairLength: "Medium",
+  pushNotifications: true,
+  competitionAlerts: true,
 };
 
 interface AppContextValue {

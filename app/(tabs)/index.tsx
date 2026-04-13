@@ -45,6 +45,17 @@ interface AnalysisState {
 
 type Phase = "camera" | "loading" | "results";
 
+function useSpringPress() {
+  const scale = useRef(new Animated.Value(1)).current;
+  const onPressIn = () => {
+    Animated.spring(scale, { toValue: 0.94, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+  };
+  const onPressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 10 }).start();
+  };
+  return { scale, onPressIn, onPressOut };
+}
+
 export default function CutMatchScreen() {
   const insets = useSafeAreaInsets();
   const { currentUser, apiBase, settings, colors } = useApp();
@@ -67,6 +78,13 @@ export default function CutMatchScreen() {
     useRef(new Animated.Value(0.3)).current,
     useRef(new Animated.Value(0.3)).current,
   ];
+  const ctaGlowAnim = useRef(new Animated.Value(0)).current;
+  const ctaGlowLoop = useRef<any>(null);
+  const resultsScrollY = useRef(new Animated.Value(0)).current;
+
+  const cameraSpring = useSpringPress();
+  const gallerySpring = useSpringPress();
+  const analyzeSpring = useSpringPress();
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -78,6 +96,30 @@ export default function CutMatchScreen() {
     else if (type === "success") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
   };
+
+  const startGlowPulse = () => {
+    ctaGlowLoop.current = Animated.loop(
+      Animated.sequence([
+        Animated.timing(ctaGlowAnim, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(ctaGlowAnim, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    );
+    ctaGlowLoop.current.start();
+  };
+
+  const stopGlowPulse = () => {
+    ctaGlowLoop.current?.stop();
+    ctaGlowAnim.setValue(0);
+  };
+
+  React.useEffect(() => {
+    if (selectedImage && phase === "camera") {
+      startGlowPulse();
+    } else {
+      stopGlowPulse();
+    }
+    return () => stopGlowPulse();
+  }, [selectedImage, phase]);
 
   const animateDots = useCallback(() => {
     loadingDotAnim.forEach((dot, i) => {
@@ -259,7 +301,7 @@ export default function CutMatchScreen() {
           hasGlasses: analysis.hasGlasses,
           recommendations: analysis.recommendations,
           caption,
-          isPublic: true,
+          isPublic: settings.publicPosts,
         }),
       });
       triggerHaptic("success");
@@ -326,6 +368,8 @@ export default function CutMatchScreen() {
     setIsSendingToFriend(false);
   };
 
+  const ctaGlowOpacity = ctaGlowAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] });
+
   return (
     <View style={[styles.container, { backgroundColor: C.background }]}>
       <LinearGradient
@@ -368,14 +412,28 @@ export default function CutMatchScreen() {
             )}
 
             <View style={styles.btnRow}>
-              <Pressable style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]} onPress={() => pickImage("camera")}>
-                <Ionicons name="camera" size={20} color={C.gold} />
-                <Text style={[styles.srcBtnText, { color: C.gold }]}>Camera</Text>
-              </Pressable>
-              <Pressable style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]} onPress={() => pickImage("gallery")}>
-                <Ionicons name="images" size={20} color={C.gold} />
-                <Text style={[styles.srcBtnText, { color: C.gold }]}>Gallery</Text>
-              </Pressable>
+              <Animated.View style={[styles.srcBtnWrap, { transform: [{ scale: cameraSpring.scale }] }]}>
+                <Pressable
+                  style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]}
+                  onPress={() => pickImage("camera")}
+                  onPressIn={cameraSpring.onPressIn}
+                  onPressOut={cameraSpring.onPressOut}
+                >
+                  <Ionicons name="camera" size={20} color={C.gold} />
+                  <Text style={[styles.srcBtnText, { color: C.gold }]}>Camera</Text>
+                </Pressable>
+              </Animated.View>
+              <Animated.View style={[styles.srcBtnWrap, { transform: [{ scale: gallerySpring.scale }] }]}>
+                <Pressable
+                  style={[styles.srcBtn, { backgroundColor: C.gold + "14", borderColor: C.gold + "40" }]}
+                  onPress={() => pickImage("gallery")}
+                  onPressIn={gallerySpring.onPressIn}
+                  onPressOut={gallerySpring.onPressOut}
+                >
+                  <Ionicons name="images" size={20} color={C.gold} />
+                  <Text style={[styles.srcBtnText, { color: C.gold }]}>Gallery</Text>
+                </Pressable>
+              </Animated.View>
             </View>
 
             <View style={[styles.pills, { backgroundColor: C.surface, borderColor: C.border }]}>
@@ -385,7 +443,9 @@ export default function CutMatchScreen() {
                 { icon: "image-outline" as const, label: "AI Photos" },
               ].map((p) => (
                 <View key={p.label} style={styles.pill}>
-                  <Ionicons name={p.icon} size={16} color={C.gold} />
+                  <View style={[styles.pillIconBox, { backgroundColor: C.gold + "18" }]}>
+                    <Ionicons name={p.icon} size={15} color={C.gold} />
+                  </View>
                   <Text style={[styles.pillText, { color: C.textSecondary }]}>{p.label}</Text>
                 </View>
               ))}
@@ -403,16 +463,34 @@ export default function CutMatchScreen() {
                 <Text style={[styles.loadingBtnText, { color: C.textSecondary }]}>{statusText}</Text>
               </View>
             ) : (
-              <Pressable
-                style={[styles.analyzeBtn, { backgroundColor: selectedImage ? C.gold : C.surface }, !selectedImage && { borderWidth: 1, borderColor: C.border }]}
-                onPress={runAnalysis}
-                disabled={!selectedImage}
-              >
-                <Ionicons name="sparkles" size={18} color={selectedImage ? C.background : C.textSecondary} />
-                <Text style={[styles.analyzeBtnText, { color: selectedImage ? C.background : C.textSecondary }]}>
-                  Find My Best Cuts
-                </Text>
-              </Pressable>
+              <View style={styles.analyzeBtnWrap}>
+                {selectedImage && (
+                  <Animated.View
+                    style={[
+                      styles.ctaGlow,
+                      { backgroundColor: C.gold, opacity: ctaGlowOpacity, pointerEvents: "none" },
+                    ]}
+                  />
+                )}
+                <Animated.View style={{ transform: [{ scale: analyzeSpring.scale }] }}>
+                  <Pressable
+                    style={[
+                      styles.analyzeBtn,
+                      { backgroundColor: selectedImage ? C.gold : C.surface },
+                      !selectedImage && { borderWidth: 1, borderColor: C.border },
+                    ]}
+                    onPress={runAnalysis}
+                    onPressIn={selectedImage ? analyzeSpring.onPressIn : undefined}
+                    onPressOut={selectedImage ? analyzeSpring.onPressOut : undefined}
+                    disabled={!selectedImage}
+                  >
+                    <Ionicons name="sparkles" size={18} color={selectedImage ? C.background : C.textSecondary} />
+                    <Text style={[styles.analyzeBtnText, { color: selectedImage ? C.background : C.textSecondary }]}>
+                      Find My Best Cuts
+                    </Text>
+                  </Pressable>
+                </Animated.View>
+              </View>
             )}
           </View>
         </>
@@ -424,24 +502,11 @@ export default function CutMatchScreen() {
           style={StyleSheet.absoluteFill}
         />
 
-        <View style={[styles.resultsHeader, { paddingTop: topPad + 12 }]}>
-          <Pressable style={[styles.backBtn, { backgroundColor: C.surface, borderColor: C.border }]} onPress={resetToCamera}>
-            <Ionicons name="chevron-back" size={22} color={C.text} />
-          </Pressable>
-          <View>
-            <Text style={[styles.resultsTitle, { color: C.text }]}>Your Best Cuts</Text>
-            {settings.showFaceShape && analysis?.faceShape && (
-              <Text style={[styles.resultsSubtitle, { color: C.textSecondary }]}>
-                {analysis.faceShape.charAt(0).toUpperCase() + analysis.faceShape.slice(1)} face shape
-              </Text>
-            )}
-          </View>
-          <View style={{ width: 40 }} />
-        </View>
-
-        <ScrollView
+        <Animated.ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.resultsScroll, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 100 }]}
+          contentContainerStyle={[styles.resultsScroll, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 100, paddingTop: topPad + 76 }]}
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: resultsScrollY } } }], { useNativeDriver: false })}
+          scrollEventThrottle={16}
         >
           {analysis?.faceFeatures ? (
             <View style={[styles.featureCard, { backgroundColor: C.surface, borderColor: C.border }]}>
@@ -476,7 +541,40 @@ export default function CutMatchScreen() {
           {(analysis?.recommendations ?? [{}, {}, {}, {}]).map((rec: any, i: number) => (
             <ResultCard key={i} rec={rec} index={i} colors={C} showDifficulty={settings.showDifficulty} />
           ))}
-        </ScrollView>
+        </Animated.ScrollView>
+
+        <View style={[styles.resultsHeaderWrap, { paddingTop: topPad + 12 }]}>
+          <Animated.View
+            style={[
+              styles.resultsHeaderBg,
+              {
+                backgroundColor: C.background,
+                opacity: resultsScrollY.interpolate({ inputRange: [0, 40], outputRange: [0.85, 0.97], extrapolate: "clamp" }),
+              },
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.resultsHeaderBorder,
+              {
+                backgroundColor: C.border,
+                opacity: resultsScrollY.interpolate({ inputRange: [0, 40], outputRange: [0, 1], extrapolate: "clamp" }),
+              },
+            ]}
+          />
+          <Pressable style={[styles.backBtn, { backgroundColor: C.surface, borderColor: C.border }]} onPress={resetToCamera}>
+            <Ionicons name="chevron-back" size={22} color={C.text} />
+          </Pressable>
+          <View>
+            <Text style={[styles.resultsTitle, { color: C.text }]}>Your Best Cuts</Text>
+            {settings.showFaceShape && analysis?.faceShape && (
+              <Text style={[styles.resultsSubtitle, { color: C.textSecondary }]}>
+                {analysis.faceShape.charAt(0).toUpperCase() + analysis.faceShape.slice(1)} face shape
+              </Text>
+            )}
+          </View>
+          <View style={{ width: 40 }} />
+        </View>
 
         {analysis && (
           <View style={[styles.shareBar, { paddingBottom: TAB_BAR_HEIGHT + bottomPad + 8, backgroundColor: C.background + "F0", borderTopColor: C.border }]}>
@@ -535,13 +633,13 @@ export default function CutMatchScreen() {
 }
 
 function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index: number; colors: any; showDifficulty: boolean }) {
-  const slideAnim = useRef(new Animated.Value(40)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
     Animated.parallel([
-      Animated.spring(slideAnim, { toValue: 0, delay: index * 80, tension: 70, friction: 14, useNativeDriver: true }),
-      Animated.timing(opacityAnim, { toValue: 1, duration: 300, delay: index * 80, useNativeDriver: true }),
+      Animated.spring(slideAnim, { toValue: 0, delay: index * 100, tension: 65, friction: 13, useNativeDriver: true }),
+      Animated.timing(opacityAnim, { toValue: 1, duration: 350, delay: index * 100, useNativeDriver: true }),
     ]).start();
   }, []);
 
@@ -637,15 +735,23 @@ const styles = StyleSheet.create({
   uploadTitle: { fontSize: 17, fontFamily: "DMSans_700Bold" },
   uploadHint: { fontSize: 13, fontFamily: "DMSans_400Regular", textAlign: "center", lineHeight: 19 },
   btnRow: { flexDirection: "row", gap: 12 },
+  srcBtnWrap: { flex: 1 },
   srcBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     paddingVertical: 13, borderRadius: 14, borderWidth: 1,
   },
   srcBtnText: { fontSize: 14, fontFamily: "DMSans_500Medium" },
-  pills: { flexDirection: "row", justifyContent: "space-around", borderRadius: 14, paddingVertical: 14, borderWidth: 1 },
-  pill: { alignItems: "center", gap: 5 },
+  pills: { flexDirection: "row", justifyContent: "space-around", borderRadius: 14, paddingVertical: 14, borderWidth: 1, paddingHorizontal: 8 },
+  pill: { alignItems: "center", gap: 6 },
+  pillIconBox: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   pillText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
   footer: { paddingHorizontal: 20, paddingTop: 10 },
+  analyzeBtnWrap: { position: "relative" },
+  ctaGlow: {
+    position: "absolute",
+    top: -8, left: -8, right: -8, bottom: -8,
+    borderRadius: 24,
+  },
   analyzeBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     paddingVertical: 16, borderRadius: 16,
@@ -659,6 +765,17 @@ const styles = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3 },
   loadingBtnText: { fontSize: 15, fontFamily: "DMSans_500Medium" },
   resultsPanel: { ...StyleSheet.absoluteFillObject },
+  resultsHeaderWrap: {
+    position: "absolute", top: 0, left: 0, right: 0,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingBottom: 12,
+  },
+  resultsHeaderBg: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  resultsHeaderBorder: {
+    position: "absolute", bottom: 0, left: 0, right: 0, height: 1,
+  },
   resultsHeader: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 20, paddingBottom: 12,
@@ -714,7 +831,6 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 18, borderWidth: 1, overflow: "hidden", padding: 14, gap: 0,
   },
-  card1: {},
   cardRow: { flexDirection: "row", gap: 12 },
   cardImgBox: { width: 90, height: 110, borderRadius: 12, overflow: "hidden", position: "relative" },
   cardImg: { width: "100%", height: "100%" },
