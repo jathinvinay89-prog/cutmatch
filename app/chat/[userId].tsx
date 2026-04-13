@@ -7,9 +7,9 @@ import {
   Pressable,
   Platform,
   TextInput,
-  Modal,
   Alert,
   ActivityIndicator,
+  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -70,6 +70,69 @@ function CutMatchBubble({ meta, isMine, colors: C }: any) {
       <Text style={[cmS.name, { color: C.text }]}>{rec?.name || "CutMatch Result"}</Text>
       <Text style={[cmS.desc, { color: C.textSecondary }]} numberOfLines={1}>{rec?.description}</Text>
     </View>
+  );
+}
+
+function BottomSheet({ visible, onClose, children, colors: C }: { visible: boolean; onClose: () => void; children: React.ReactNode; colors: any }) {
+  const translateY = useRef(new Animated.Value(300)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      Animated.parallel([
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: true, tension: 100, friction: 12 }),
+        Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(translateY, { toValue: 300, duration: 200, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+      ]).start(() => setMounted(false));
+    }
+  }, [visible]);
+
+  if (!mounted) return null;
+
+  return (
+    <View style={bsS.overlay} pointerEvents={visible ? "auto" : "none"}>
+      <Animated.View style={[bsS.backdrop, { opacity }]}>
+        <Pressable style={{ flex: 1 }} onPress={onClose} />
+      </Animated.View>
+      <Animated.View style={[bsS.sheet, { backgroundColor: C.surface, borderColor: C.border, transform: [{ translateY }] }]}>
+        {children}
+      </Animated.View>
+    </View>
+  );
+}
+
+const bsS = StyleSheet.create({
+  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-end", zIndex: 100 },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.5)" },
+  sheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderBottomWidth: 0, overflow: "hidden", paddingBottom: 24 },
+});
+
+function SendButton({ onPress, disabled, gold, background }: { onPress: () => void; disabled: boolean; gold: string; background: string }) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const onPressIn = () => {
+    Animated.spring(scale, { toValue: 0.88, useNativeDriver: true, tension: 200, friction: 10 }).start();
+  };
+  const onPressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, tension: 200, friction: 10 }).start();
+  };
+
+  return (
+    <Pressable onPress={onPress} onPressIn={onPressIn} onPressOut={onPressOut} disabled={disabled}>
+      <Animated.View style={[
+        styles.sendBtn,
+        disabled ? { backgroundColor: "transparent", borderWidth: 1 } : { backgroundColor: gold },
+        { transform: [{ scale }] },
+      ]}>
+        <Ionicons name="arrow-up" size={18} color={disabled ? gold + "66" : background} />
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -161,12 +224,12 @@ export default function ChatScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: C.background }]}>
-      <View style={[styles.header, { paddingTop: topPad + 12, borderBottomColor: C.border }]}>
-        <Pressable style={[styles.backBtn, { backgroundColor: C.surface, borderColor: C.border }]} onPress={() => router.back()}>
+      <View style={[styles.header, { paddingTop: topPad + 10, borderBottomColor: C.border }]}>
+        <Pressable style={[styles.backBtn, { borderColor: C.border }]} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={22} color={C.text} />
         </Pressable>
         <View style={[styles.headerAvatar, { backgroundColor: `hsl(${hue}, 50%, 30%)` }]}>
-          <Text style={[styles.headerAvatarText, { color: C.text }]}>{initials(otherName)}</Text>
+          <Text style={[styles.headerAvatarText, { color: "#fff" }]}>{initials(otherName)}</Text>
         </View>
         <View style={styles.headerInfo}>
           <Text style={[styles.headerName, { color: C.text }]}>{otherName}</Text>
@@ -179,12 +242,12 @@ export default function ChatScreen() {
           ref={flatRef}
           data={messages}
           keyExtractor={(m) => String(m.id)}
-          contentContainerStyle={[styles.messageList, { paddingTop: 12 }]}
+          contentContainerStyle={[styles.messageList, { paddingTop: 16 }]}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <View style={[styles.emptyAvatar, { backgroundColor: `hsl(${hue}, 50%, 30%)` }]}>
-                <Text style={[styles.emptyAvatarText, { color: C.text }]}>{initials(otherName)}</Text>
+                <Text style={[styles.emptyAvatarText, { color: "#fff" }]}>{initials(otherName)}</Text>
               </View>
               <Text style={[styles.emptyName, { color: C.text }]}>{otherName}</Text>
               <Text style={[styles.emptyHint, { color: C.textSecondary }]}>Start a conversation about haircuts</Text>
@@ -219,7 +282,7 @@ export default function ChatScreen() {
             }
             return (
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
-                <View style={[styles.bubble, isMine ? [styles.bubbleMine, { backgroundColor: C.gold, borderColor: C.gold }] : [styles.bubbleOther, { backgroundColor: C.surface, borderColor: C.border }]]}>
+                <View style={[styles.bubble, isMine ? { backgroundColor: C.gold } : { backgroundColor: C.surface, borderColor: C.border, borderWidth: StyleSheet.hairlineWidth }]}>
                   <Text style={[styles.bubbleText, { color: isMine ? C.background : C.text }]}>{item.content}</Text>
                 </View>
                 <Text style={[styles.msgTime, isMine && styles.msgTimeMine, { color: C.textSecondary }]}>{timeLabel(item.createdAt)}</Text>
@@ -233,7 +296,7 @@ export default function ChatScreen() {
             style={[styles.plusBtn, { backgroundColor: C.surface, borderColor: C.border }]}
             onPress={() => setShowPlusMenu(true)}
           >
-            <Ionicons name="add" size={20} color={C.gold} />
+            <Ionicons name="add" size={22} color={C.gold} />
           </Pressable>
           <TextInput
             style={[styles.input, { backgroundColor: C.surface, borderColor: C.border, color: C.text }]}
@@ -246,61 +309,53 @@ export default function ChatScreen() {
             multiline
             maxLength={500}
           />
-          <Pressable
-            style={[styles.sendBtn, !input.trim() ? [styles.sendBtnDisabled, { backgroundColor: C.surface2 }] : { backgroundColor: C.gold }]}
-            onPress={send}
-            disabled={!input.trim()}
-          >
-            <Ionicons name="arrow-up" size={18} color={input.trim() ? C.background : C.textSecondary} />
-          </Pressable>
+          <SendButton onPress={send} disabled={!input.trim()} gold={C.gold} background={C.background} />
         </View>
       </KeyboardAvoidingView>
 
-      <Modal visible={showPlusMenu} transparent animationType="fade">
-        <Pressable style={styles.menuOverlay} onPress={() => setShowPlusMenu(false)}>
-          <View style={[styles.menuCard, { backgroundColor: C.surface, borderColor: C.border }]}>
-            <Text style={[styles.menuTitle, { color: C.textSecondary }]}>Send Something</Text>
+      <BottomSheet visible={showPlusMenu} onClose={() => setShowPlusMenu(false)} colors={C}>
+        <Text style={[styles.menuTitle, { color: C.textSecondary }]}>Send Something</Text>
 
-            <Pressable style={[styles.menuItem, { borderBottomColor: C.border }]} onPress={sendCutMatch}>
-              <View style={[styles.menuIcon, { backgroundColor: C.gold + "20" }]}>
-                <Ionicons name="cut-outline" size={22} color={C.gold} />
-              </View>
-              <View style={styles.menuInfo}>
-                <Text style={[styles.menuItemTitle, { color: C.text }]}>Send CutMatch</Text>
-                <Text style={[styles.menuItemDesc, { color: C.textSecondary }]}>Share your latest haircut results</Text>
-              </View>
-            </Pressable>
-
-            <Pressable style={styles.menuItem} onPress={startCompetition} disabled={loadingComp}>
-              <View style={[styles.menuIcon, { backgroundColor: C.gold + "20" }]}>
-                {loadingComp ? <ActivityIndicator color={C.gold} size="small" /> : <Ionicons name="trophy-outline" size={22} color={C.gold} />}
-              </View>
-              <View style={styles.menuInfo}>
-                <Text style={[styles.menuItemTitle, { color: C.text }]}>CutCompetition</Text>
-                <Text style={[styles.menuItemDesc, { color: C.textSecondary }]}>Challenge them — who has the better cut?</Text>
-              </View>
-            </Pressable>
+        <Pressable style={[styles.menuItem, { borderBottomColor: C.border }]} onPress={sendCutMatch}>
+          <View style={[styles.menuIcon, { backgroundColor: C.gold + "20" }]}>
+            <Ionicons name="cut-outline" size={24} color={C.gold} />
           </View>
+          <View style={styles.menuInfo}>
+            <Text style={[styles.menuItemTitle, { color: C.text }]}>Send CutMatch</Text>
+            <Text style={[styles.menuItemDesc, { color: C.textSecondary }]}>Share your latest haircut results</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={C.border} />
         </Pressable>
-      </Modal>
+
+        <Pressable style={styles.menuItem} onPress={startCompetition} disabled={loadingComp}>
+          <View style={[styles.menuIcon, { backgroundColor: C.gold + "20" }]}>
+            {loadingComp ? <ActivityIndicator color={C.gold} size="small" /> : <Ionicons name="trophy-outline" size={24} color={C.gold} />}
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={[styles.menuItemTitle, { color: C.text }]}>CutCompetition</Text>
+            <Text style={[styles.menuItemDesc, { color: C.textSecondary }]}>Challenge them — who has the better cut?</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={C.border} />
+        </Pressable>
+      </BottomSheet>
     </View>
   );
 }
 
 const cbS = StyleSheet.create({
-  card: { borderRadius: 16, borderWidth: 1, padding: 14, gap: 8, maxWidth: "80%" },
+  card: { borderRadius: 20, borderWidth: 1, padding: 14, gap: 8, maxWidth: "80%" },
   header: { flexDirection: "row", alignItems: "center", gap: 6 },
   title: { fontSize: 13, fontFamily: "DMSans_700Bold" },
   desc: { fontSize: 12, fontFamily: "DMSans_400Regular", lineHeight: 17 },
-  tapBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, alignSelf: "flex-start" },
+  tapBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12, alignSelf: "flex-start" },
   tapText: { fontSize: 12, fontFamily: "DMSans_700Bold" },
 });
 
 const cmS = StyleSheet.create({
-  card: { borderRadius: 16, borderWidth: 1, padding: 12, gap: 6, maxWidth: "75%" },
+  card: { borderRadius: 20, borderWidth: 1, padding: 12, gap: 6, maxWidth: "75%" },
   header: { flexDirection: "row", alignItems: "center", gap: 5 },
   label: { fontSize: 10, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 0.5 },
-  img: { width: "100%", height: 120, borderRadius: 10 },
+  img: { width: "100%", height: 120, borderRadius: 12 },
   name: { fontSize: 14, fontFamily: "DMSans_700Bold" },
   desc: { fontSize: 11, fontFamily: "DMSans_400Regular" },
 });
@@ -308,37 +363,32 @@ const cmS = StyleSheet.create({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   flex: { flex: 1 },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
+  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   backBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 10, borderWidth: 1 },
   headerAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   headerAvatarText: { fontSize: 14, fontFamily: "DMSans_700Bold" },
   headerInfo: { flex: 1 },
   headerName: { fontSize: 16, fontFamily: "DMSans_700Bold" },
   headerOnline: { fontSize: 11, fontFamily: "DMSans_400Regular" },
-  messageList: { paddingHorizontal: 16, paddingBottom: 8, gap: 6 },
+  messageList: { paddingHorizontal: 16, paddingBottom: 8, gap: 8 },
   emptyState: { alignItems: "center", gap: 10, paddingTop: 60 },
   emptyAvatar: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center" },
   emptyAvatarText: { fontSize: 24, fontFamily: "DMSans_700Bold" },
   emptyName: { fontSize: 17, fontFamily: "DMSans_700Bold" },
   emptyHint: { fontSize: 13, fontFamily: "DMSans_400Regular" },
-  msgRow: { alignItems: "flex-start", gap: 2 },
+  msgRow: { alignItems: "flex-start", gap: 3 },
   msgRowMine: { alignItems: "flex-end" },
-  bubble: { maxWidth: "75%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9, borderWidth: 1 },
-  bubbleMine: {},
-  bubbleOther: {},
+  bubble: { maxWidth: "76%", borderRadius: 22, paddingHorizontal: 15, paddingVertical: 10 },
   bubbleText: { fontSize: 14, fontFamily: "DMSans_400Regular", lineHeight: 20 },
   msgTime: { fontSize: 10, fontFamily: "DMSans_400Regular", paddingHorizontal: 4 },
   msgTimeMine: {},
-  inputBar: { flexDirection: "row", alignItems: "flex-end", gap: 8, paddingHorizontal: 12, paddingTop: 10, borderTopWidth: 1 },
+  inputBar: { flexDirection: "row", alignItems: "flex-end", gap: 8, paddingHorizontal: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
   plusBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", borderWidth: 1 },
-  input: { flex: 1, borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, fontFamily: "DMSans_400Regular", borderWidth: 1, maxHeight: 100 },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  sendBtnDisabled: {},
-  menuOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end", paddingHorizontal: 16, paddingBottom: 40 },
-  menuCard: { borderRadius: 20, borderWidth: 1, overflow: "hidden" },
-  menuTitle: { fontSize: 11, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 1, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 },
-  menuItem: { flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderBottomWidth: 1 },
-  menuIcon: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center" },
+  input: { flex: 1, borderRadius: 24, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, fontFamily: "DMSans_400Regular", borderWidth: StyleSheet.hairlineWidth, maxHeight: 100 },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", borderColor: "transparent" },
+  menuTitle: { fontSize: 11, fontFamily: "DMSans_700Bold", textTransform: "uppercase", letterSpacing: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 8 },
+  menuItem: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  menuIcon: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   menuInfo: { flex: 1 },
   menuItemTitle: { fontSize: 16, fontFamily: "DMSans_700Bold" },
   menuItemDesc: { fontSize: 12, fontFamily: "DMSans_400Regular", marginTop: 2 },

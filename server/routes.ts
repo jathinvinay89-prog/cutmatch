@@ -668,6 +668,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
+  // ── AI HAIR ADVISOR ───────────────────────────────────────────────────────
+  interface AdvisorMessage {
+    role: "user" | "assistant";
+    content: string;
+  }
+
+  app.post("/api/ai-advisor", async (req: Request, res: Response) => {
+    try {
+      const { messages: history, faceShape } = req.body as { messages: AdvisorMessage[]; faceShape?: string | null };
+      if (!Array.isArray(history)) return res.status(400).json({ error: "messages array required" });
+
+      const faceShapeNote = faceShape ? ` The user's face shape is ${faceShape} — tailor your advice accordingly.` : "";
+
+      const systemPrompt = `You are an expert hair stylist and personal hair advisor for the CutMatch app.${faceShapeNote}
+You give friendly, practical, personalized advice about haircuts, hairstyles, face shapes, hair care, and grooming.
+Keep responses concise and helpful — 1-4 sentences unless more detail is needed. Use casual, warm language.
+Never be dismissive. If unsure, offer general guidance and encourage the user to consult a local stylist.`;
+
+      const chatHistory = history.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+      const response = await getGroq().chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...chatHistory,
+        ],
+        max_tokens: 400,
+        temperature: 0.75,
+      });
+
+      const reply = response.choices[0]?.message?.content?.trim() || "I'm not sure about that. Try asking me something else!";
+      res.json({ reply });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "AI advisor error" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

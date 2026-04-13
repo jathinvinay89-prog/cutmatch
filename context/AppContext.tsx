@@ -16,6 +16,7 @@ export interface AppUser {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  faceShape?: string | null;
 }
 
 export interface AppSettings {
@@ -23,6 +24,12 @@ export interface AppSettings {
   showFaceShape: boolean;
   showDifficulty: boolean;
   enableHaptics: boolean;
+}
+
+export interface AIAdvisorMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -45,6 +52,8 @@ interface AppContextValue {
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
   colors: typeof DarkColors;
+  aiAdvisorMessages: AIAdvisorMessage[];
+  setAiAdvisorMessages: (msgs: AIAdvisorMessage[]) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -53,6 +62,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUserState] = useState<AppUser | null>(null);
   const [isLoadingUser, setIsLoadingUser] = useState(true);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [aiAdvisorMessages, setAiAdvisorMessages] = useState<AIAdvisorMessage[]>([]);
 
   const apiBase = getApiUrl();
   const colors = settings.isDarkMode ? DarkColors : LightColors;
@@ -152,8 +162,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const value = useMemo(
-    () => ({ currentUser, isLoadingUser, setCurrentUser, createUser, login, register, logout, uploadAvatar, apiBase, settings, updateSettings, colors }),
-    [currentUser, isLoadingUser, apiBase, settings]
+    () => ({ currentUser, isLoadingUser, setCurrentUser, createUser, login, register, logout, uploadAvatar, apiBase, settings, updateSettings, colors, aiAdvisorMessages, setAiAdvisorMessages }),
+    [currentUser, isLoadingUser, apiBase, settings, aiAdvisorMessages]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
