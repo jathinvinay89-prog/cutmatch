@@ -95,52 +95,57 @@ Include exactly 4 recommendations. Be concise and fast.`,
   return JSON.parse(match[0]);
 }
 
-function buildHfPrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
+function buildImagePrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
   const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
   return `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`.slice(0, 500);
 }
 
-async function generateAndSaveImageHf(prompt: string, rank: number): Promise<string | null> {
+function buildPollinationsUrl(prompt: string, rank: number): string {
+  const encoded = encodeURIComponent(prompt);
+  const seed = (rank * 123456 + Date.now()) % 999999;
+  return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
+}
+
+async function generateImageUrl(analysis: FaceAnalysis, rec: HaircutRec): Promise<string> {
+  const prompt = buildImagePrompt(analysis, rec);
   const hfToken = process.env.HF_TOKEN;
-  if (!hfToken) {
-    console.log(`Rank ${rank}: HF_TOKEN not set, skipping image generation`);
-    return null;
-  }
-  const maxAttempts = 3;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      const delay = attempt * 2000;
-      console.log(`Rank ${rank}: retry #${attempt} in ${delay}ms`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-    try {
-      const res = await fetch(
-        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${hfToken}`,
-            "Content-Type": "application/json",
-            Accept: "image/jpeg",
-          },
-          body: JSON.stringify({ inputs: prompt, parameters: { num_inference_steps: 4 } }),
-          signal: AbortSignal.timeout(60000),
+
+  if (hfToken) {
+    const maxAttempts = 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const res = await fetch(
+          "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${hfToken}`,
+              "Content-Type": "application/json",
+              Accept: "image/jpeg",
+            },
+            body: JSON.stringify({ inputs: prompt, parameters: { num_inference_steps: 4 } }),
+            signal: AbortSignal.timeout(45000),
+          }
+        );
+        if (res.ok) {
+          const buf = await res.arrayBuffer();
+          const saved = saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
+          console.log(`Rank ${rec.rank}: HF image saved`);
+          return saved;
         }
-      );
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        const saved = saveImageFile(Buffer.from(buf).toString("base64"), "jpg");
-        console.log(`Rank ${rank}: HF image saved to ${saved}`);
-        return saved;
+        console.log(`Rank ${rec.rank}: HF got ${res.status}`);
+        if (res.status !== 429 && res.status !== 503) break;
+      } catch (err: any) {
+        console.log(`Rank ${rec.rank}: HF error: ${err?.message}`);
       }
-      const errText = await res.text().catch(() => "");
-      console.log(`Rank ${rank}: HF attempt ${attempt + 1} got ${res.status}: ${errText.slice(0, 200)}`);
-      if (res.status !== 429 && res.status !== 503) break;
-    } catch (err: any) {
-      console.log(`Rank ${rank}: HF attempt ${attempt + 1} error: ${err?.message}`);
     }
   }
-  return null;
+
+  // Fallback: return Pollinations URL directly (client loads it)
+  const url = buildPollinationsUrl(prompt, rec.rank);
+  console.log(`Rank ${rec.rank}: using Pollinations URL`);
+  return url;
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -214,12 +219,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const recsWithImages = [];
       for (const rec of analysis.recommendations) {
-        const prompt = buildHfPrompt(analysis, rec);
-        const savedUrl = await generateAndSaveImageHf(prompt, rec.rank);
+        const imageUrl = await generateImageUrl(analysis, rec);
         recsWithImages.push({
           rank: rec.rank, name: rec.name, description: rec.description,
           whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-          generatedImage: savedUrl ?? null,
+          generatedImage: imageUrl,
         });
       }
 
@@ -310,9 +314,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       send("status", { message: "Generating your AI looks..." });
 
       for (const rec of analysis.recommendations) {
-        const prompt = buildHfPrompt(analysis, rec);
-        const savedUrl = await generateAndSaveImageHf(prompt, rec.rank);
-        send("image", { rank: rec.rank, generatedImage: savedUrl ?? null });
+        const imageUrl = await generateImageUrl(analysis, rec);
+        send("image", { rank: rec.rank, generatedImage: imageUrl });
       }
 
       send("done", {});
