@@ -30,6 +30,12 @@ function saveImageFile(base64Data: string, ext = "png"): string {
   return `${getServerBase()}/uploads/${filename}`;
 }
 
+function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
+  const filename = `${crypto.randomUUID()}.${ext}`;
+  fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
+  return `${getServerBase()}/uploads/${filename}`;
+}
+
 // ── GROQ AI (free, ultra-fast inference) ─────────────────────────────────────
 // Uses Groq's free API with llama-4-scout for vision-based face analysis.
 let _groq: OpenAI | null = null;
@@ -106,11 +112,37 @@ function buildPollinationsUrl(prompt: string, rank: number): string {
   return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
 }
 
-async function generateImageUrl(analysis: FaceAnalysis, rec: HaircutRec): Promise<string> {
+async function fetchPollinationsImage(url: string, retries = 2, delayMs = 2000): Promise<Buffer | null> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.startsWith("image/")) throw new Error(`Unexpected content-type: ${contentType}`);
+      const arrayBuffer = await response.arrayBuffer();
+      const buf = Buffer.from(arrayBuffer);
+      if (buf.length < 1000) throw new Error("Response too small, likely not a valid image");
+      return buf;
+    } catch (err: any) {
+      console.warn(`Rank fetch attempt ${attempt + 1} failed: ${err.message}`);
+      if (attempt < retries) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return null;
+}
+
+async function generateImageUrl(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
   const prompt = buildImagePrompt(analysis, rec);
   const url = buildPollinationsUrl(prompt, rec.rank);
-  console.log(`Rank ${rec.rank}: using Pollinations URL`);
-  return url;
+  console.log(`Rank ${rec.rank}: fetching Pollinations image...`);
+  const buf = await fetchPollinationsImage(url);
+  if (!buf) {
+    console.warn(`Rank ${rec.rank}: all retries failed, skipping image`);
+    return null;
+  }
+  const localUrl = saveImageBuffer(buf);
+  console.log(`Rank ${rec.rank}: saved to ${localUrl}`);
+  return localUrl;
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -182,15 +214,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = [];
-      for (const rec of analysis.recommendations) {
-        const imageUrl = await generateImageUrl(analysis, rec);
-        recsWithImages.push({
-          rank: rec.rank, name: rec.name, description: rec.description,
-          whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-          generatedImage: imageUrl,
-        });
-      }
+      const recsWithImages = await Promise.all(
+        analysis.recommendations.map(async (rec) => {
+          const imageUrl = await generateImageUrl(analysis, rec);
+          return {
+            rank: rec.rank, name: rec.name, description: rec.description,
+            whyItFits: rec.whyItFits, difficulty: rec.difficulty,
+            generatedImage: imageUrl,
+          };
+        })
+      );
 
       res.json({
         faceShape: analysis.faceShape,
@@ -278,10 +311,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       send("status", { message: "Generating your AI looks..." });
 
-      for (const rec of analysis.recommendations) {
-        const imageUrl = await generateImageUrl(analysis, rec);
-        send("image", { rank: rec.rank, generatedImage: imageUrl });
-      }
+      await Promise.allSettled(
+        analysis.recommendations.map(async (rec) => {
+          try {
+            const imageUrl = await generateImageUrl(analysis, rec);
+            send("image", { rank: rec.rank, generatedImage: imageUrl });
+          } catch (imgErr: any) {
+            console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
+            send("image", { rank: rec.rank, generatedImage: null });
+          }
+        })
+      );
 
       send("done", {});
       res.end();
