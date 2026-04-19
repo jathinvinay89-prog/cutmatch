@@ -729,6 +729,12 @@ function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index
           <Text style={[styles.whyText, { color: C.textSecondary }]}>{rec.whyItFits}</Text>
         </View>
       )}
+      {rec.generatedImage && (
+        <View style={[styles.qualityBadge, { borderTopColor: C.border }]}>
+          <Ionicons name="shield-checkmark-outline" size={11} color={C.gold} />
+          <Text style={[styles.qualityBadgeText, { color: C.textSecondary }]}>Designed to keep your face unchanged</Text>
+        </View>
+      )}
     </Animated.View>
   );
 }
@@ -884,6 +890,11 @@ const styles = StyleSheet.create({
     paddingTop: 10, marginTop: 10, borderTopWidth: 1,
   },
   whyText: { flex: 1, fontSize: 12, fontFamily: "DMSans_400Regular", lineHeight: 17 },
+  qualityBadge: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingTop: 8, marginTop: 8, borderTopWidth: 1,
+  },
+  qualityBadgeText: { fontSize: 11, fontFamily: "DMSans_500Medium" },
   cardSkeleton: { flexDirection: "row", gap: 12, padding: 14, borderRadius: 18, borderWidth: 1 },
   skeletonImg: { width: 90, height: 110, borderRadius: 12 },
   skeletonLines: { flex: 1, gap: 8, justifyContent: "center" },
