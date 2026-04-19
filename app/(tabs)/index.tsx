@@ -236,6 +236,9 @@ export default function CutMatchScreen() {
       const decoder = new TextDecoder();
       let buffer = "";
       let currentAnalysis: AnalysisState | null = null;
+      let imagesReceived = 0;
+      let totalImages = 0;
+      let resultsShown = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -257,9 +260,8 @@ export default function CutMatchScreen() {
                 hasGlasses: event.hasGlasses,
                 recommendations: event.recommendations,
               };
-              setAnalysis(currentAnalysis);
-              setStatusText("Generating your AI looks...");
-              showResults();
+              totalImages = event.recommendations.length;
+              setStatusText(`Generating your looks... 0 of ${totalImages}`);
             } else if (event.type === "image") {
               if (currentAnalysis) {
                 currentAnalysis = {
@@ -270,7 +272,16 @@ export default function CutMatchScreen() {
                       : r
                   ),
                 };
-                setAnalysis({ ...currentAnalysis });
+                imagesReceived++;
+                if (imagesReceived < totalImages) {
+                  setStatusText(`Generating your looks... ${imagesReceived} of ${totalImages}`);
+                } else if (!resultsShown) {
+                  resultsShown = true;
+                  setStatusText("Your CutMatch is ready!");
+                  setAnalysis({ ...currentAnalysis });
+                  triggerHaptic("success");
+                  showResults();
+                }
               }
             } else if (event.type === "error") {
               throw new Error(event.message);
@@ -279,6 +290,12 @@ export default function CutMatchScreen() {
             if (!(e instanceof SyntaxError)) throw e;
           }
         }
+      }
+
+      if (!resultsShown && currentAnalysis) {
+        setAnalysis({ ...currentAnalysis });
+        triggerHaptic("success");
+        showResults();
       }
     } catch (err: any) {
       triggerHaptic("error");
