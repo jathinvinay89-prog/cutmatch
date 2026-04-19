@@ -86,6 +86,15 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="my-cuts"
+        options={{
+          title: "My Cuts",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="images-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="messages"
         options={{
           title: "Messages",

@@ -101,6 +101,54 @@ function FriendRequestCard({ item, apiBase, onRespond, colors: C }: { item: Frie
   );
 }
 
+interface AppNotification {
+  id: number;
+  senderId: number;
+  receiverId: number;
+  content: string;
+  messageType: string;
+  metadata: any;
+  createdAt: string;
+}
+
+function timeAgo(dateStr: string) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.floor(hrs / 24)}d`;
+}
+
+interface MessagesColors {
+  background: string;
+  surface: string;
+  surface2: string;
+  border: string;
+  text: string;
+  textSecondary: string;
+  gold: string;
+}
+
+function NotificationItem({ item, colors: C }: { item: AppNotification; colors: MessagesColors }) {
+  const isVote = item.messageType === "vote_notification";
+  const iconName: React.ComponentProps<typeof Ionicons>["name"] = isVote ? "star" : "timer";
+  const iconColor = isVote ? C.gold : C.textSecondary;
+
+  return (
+    <View style={[styles.notifRow, { borderBottomColor: C.border }]}>
+      <View style={[styles.notifIcon, { backgroundColor: iconColor + "18", borderColor: iconColor + "40" }]}>
+        <Ionicons name={iconName} size={16} color={iconColor} />
+      </View>
+      <View style={styles.notifInfo}>
+        <Text style={[styles.notifContent, { color: C.text }]}>{item.content}</Text>
+        <Text style={[styles.notifTime, { color: C.textSecondary }]}>{timeAgo(item.createdAt)}</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
   const { currentUser, apiBase, isLoadingUser, colors: C } = useApp();
@@ -124,6 +172,17 @@ export default function MessagesScreen() {
     enabled: !!currentUser,
     queryFn: async () => {
       const res = await fetch(new URL(`/api/friends/${currentUser!.id}/requests`, apiBase).toString());
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 15000,
+  });
+
+  const { data: notifications = [] } = useQuery<AppNotification[]>({
+    queryKey: ["/api/notifications", currentUser?.id],
+    enabled: !!currentUser,
+    queryFn: async () => {
+      const res = await fetch(new URL(`/api/users/${currentUser!.id}/notifications`, apiBase).toString());
       if (!res.ok) return [];
       return res.json();
     },
@@ -187,6 +246,15 @@ export default function MessagesScreen() {
           contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + bottomPad + 16 }}
           ListHeaderComponent={
             <>
+              {notifications.length > 0 && (
+                <View style={[styles.requestsSection, { borderBottomColor: C.border }]}>
+                  <Text style={[styles.sectionLabel, { color: C.textSecondary }]}>NOTIFICATIONS</Text>
+                  {notifications.slice(0, 10).map((notif) => (
+                    <NotificationItem key={notif.id} item={notif} colors={C} />
+                  ))}
+                </View>
+              )}
+
               {requests.length > 0 && (
                 <View style={[styles.requestsSection, { borderBottomColor: C.border }]}>
                   <Text style={[styles.sectionLabel, { color: C.textSecondary }]}>FRIEND REQUESTS</Text>
@@ -285,4 +353,9 @@ const styles = StyleSheet.create({
   timestamp: { fontSize: 11, fontFamily: "DMSans_400Regular" },
   aiTag: { borderRadius: 5, borderWidth: 1, paddingHorizontal: 5, paddingVertical: 1 },
   aiTagText: { fontSize: 9, fontFamily: "DMSans_700Bold", letterSpacing: 0.5 },
+  notifRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  notifIcon: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  notifInfo: { flex: 1 },
+  notifContent: { fontSize: 13, fontFamily: "DMSans_500Medium", lineHeight: 18 },
+  notifTime: { fontSize: 11, fontFamily: "DMSans_400Regular", marginTop: 2 },
 });

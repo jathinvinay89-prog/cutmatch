@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
 import { users, posts, ratings, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
-import { eq, desc, and, or, ne, sql, lt, isNotNull } from "drizzle-orm";
+import { eq, desc, and, or, ne, sql, lt, gt, isNull, isNotNull, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
 import * as fs from "fs";
@@ -402,6 +402,46 @@ async function checkExpiredCompetitions() {
 // Run expiry check every 10 minutes
 setInterval(checkExpiredCompetitions, 10 * 60 * 1000);
 
+// ── POST EXPIRY ──────────────────────────────────────────────────────────────
+function notExpiredNow() {
+  const now = new Date();
+  return and(eq(posts.isExpired, false), or(isNull(posts.expiresAt), gt(posts.expiresAt, now)));
+}
+
+async function checkExpiredPosts() {
+  try {
+    const now = new Date();
+    const expired = await db
+      .select()
+      .from(posts)
+      .where(and(eq(posts.postType, "cutmatch"), eq(posts.isExpired, false), isNotNull(posts.expiresAt), lt(posts.expiresAt!, now)));
+
+    for (const post of expired) {
+      await db.update(posts)
+        .set({ isExpired: true })
+        .where(eq(posts.id, post.id));
+
+      await db.insert(directMessages).values({
+        senderId: post.userId,
+        receiverId: post.userId,
+        content: "Your cut match post has expired and been removed.",
+        messageType: "post_expired",
+        metadata: { postId: post.id },
+      });
+    }
+
+    if (expired.length > 0) {
+      invalidateFeedCache();
+    }
+  } catch (e) {
+    console.error("Post expiry check error:", e);
+  }
+}
+
+// Run post expiry check on startup and then every 10 minutes
+checkExpiredPosts();
+setInterval(checkExpiredPosts, 10 * 60 * 1000);
+
 export async function registerRoutes(app: Express): Promise<Server> {
 
   if (!process.env.HUGGINGFACE_API_TOKEN) {
@@ -651,8 +691,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .innerJoin(users, eq(posts.userId, users.id))
         .where(
           cursor
-            ? and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch"), lt(posts.createdAt, new Date(cursor)))
-            : and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch"))
+            ? and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch"), notExpiredNow(), lt(posts.createdAt, new Date(cursor)))
+            : and(eq(posts.isPublic, true), eq(posts.postType, "cutmatch"), notExpiredNow())
         )
         .orderBy(desc(posts.createdAt))
         .limit(limit + 1);
@@ -748,6 +788,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(posts).innerJoin(users, eq(posts.userId, users.id))
         .where(eq(posts.id, parseInt(req.params.id)));
       if (!row) return res.status(404).json({ error: "Not found" });
+      const p = row.post;
+      if (p.isExpired || (p.expiresAt && new Date() > p.expiresAt)) {
+        return res.status(410).json({ error: "Post has expired" });
+      }
       const recs = Array.isArray(row.post.recommendations)
         ? row.post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
         : row.post.recommendations;
@@ -761,7 +805,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/users/:id/posts", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.params.id);
-      const userPosts = await db.select().from(posts).where(eq(posts.userId, userId)).orderBy(desc(posts.createdAt)).limit(20);
+      const userPosts = await db.select().from(posts)
+        .where(and(eq(posts.userId, userId), notExpiredNow()))
+        .orderBy(desc(posts.createdAt)).limit(20);
       const rewritten = userPosts.map((post) => {
         const recs = Array.isArray(post.recommendations)
           ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
@@ -769,6 +815,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
       });
       res.json(rewritten);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.get("/api/users/:id/my-cuts", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const userPosts = await db.select().from(posts)
+        .where(and(eq(posts.userId, userId), eq(posts.postType, "cutmatch"), notExpiredNow()))
+        .orderBy(desc(posts.createdAt))
+        .limit(50);
+
+      const postIds = userPosts.map((p) => p.id);
+      const allRatings = postIds.length
+        ? await db.select().from(ratings).where(inArray(ratings.postId, postIds))
+        : [];
+
+      const ratingsByPost: Record<number, Record<number, number>> = {};
+      for (const r of allRatings) {
+        if (!ratingsByPost[r.postId]) ratingsByPost[r.postId] = {};
+        ratingsByPost[r.postId][r.rank] = (ratingsByPost[r.postId][r.rank] || 0) + 1;
+      }
+
+      const result = userPosts.map((post) => {
+        const recs = Array.isArray(post.recommendations)
+          ? post.recommendations.map((r: any) => ({
+              ...r,
+              generatedImage: rewriteImageUrl(r.generatedImage, req),
+              votesCount: ratingsByPost[post.id]?.[r.rank] ?? 0,
+            }))
+          : post.recommendations;
+        return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+      });
+
+      res.json(result);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/users/:id/notifications", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const notifs = await db.select().from(directMessages)
+        .where(
+          and(
+            eq(directMessages.receiverId, userId),
+            or(
+              eq(directMessages.messageType, "vote_notification"),
+              eq(directMessages.messageType, "post_expired")
+            )
+          )
+        )
+        .orderBy(desc(directMessages.createdAt))
+        .limit(50);
+      res.json(notifs);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
@@ -780,9 +879,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const b64 = photoUrl.split(",")[1];
         photoUrl = saveImageFile(b64, "jpg");
       }
+      const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
       const [post] = await db
         .insert(posts)
-        .values({ userId, facePhotoUrl: photoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic, postType: postType || "cutmatch" })
+        .values({ userId, facePhotoUrl: photoUrl, faceShape, faceFeatures, hasGlasses, recommendations, caption, isPublic, postType: postType || "cutmatch", expiresAt })
         .returning();
       invalidateFeedCache();
       res.status(201).json(post);
@@ -794,8 +894,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { userId, rank } = req.body;
       const postId = parseInt(req.params.id);
+
+      // Check if post exists and is not expired
+      const [post] = await db.select().from(posts).where(eq(posts.id, postId));
+      if (!post) return res.status(404).json({ error: "Post not found" });
+      if (post.isExpired || (post.expiresAt && new Date() > post.expiresAt)) {
+        return res.status(410).json({ error: "Post has expired" });
+      }
+
+      const isFirstVote = !(await db.select().from(ratings).where(and(eq(ratings.postId, postId), eq(ratings.userId, userId))).then(r => r[0]));
       await db.delete(ratings).where(and(eq(ratings.postId, postId), eq(ratings.userId, userId)));
       const [rating] = await db.insert(ratings).values({ postId, userId, rank }).returning();
+
+      // Send vote notification to post owner (if voter != owner and it's a first vote)
+      if (isFirstVote && post.userId !== userId) {
+        const [voter] = await db.select().from(users).where(eq(users.id, userId));
+        const voterName = voter?.displayName || "Someone";
+        await db.insert(directMessages).values({
+          senderId: userId,
+          receiverId: post.userId,
+          content: `${voterName} voted for Cut #${rank} on your post!`,
+          messageType: "vote_notification",
+          metadata: { postId, rank, voterId: userId },
+        });
+      }
+
       res.json(rating);
     } catch { res.status(500).json({ error: "Server error" }); }
   });

@@ -24,6 +24,8 @@ export const posts = pgTable("posts", {
   caption: text("caption").default(""),
   isPublic: boolean("is_public").default(true),
   postType: text("post_type").default("cutmatch"),
+  expiresAt: timestamp("expires_at"),
+  isExpired: boolean("is_expired").default(false),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
 }, (table) => ({
   postsUserIdIdx: index("posts_user_id_idx").on(table.userId),
