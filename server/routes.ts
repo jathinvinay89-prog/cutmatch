@@ -1,7 +1,7 @@
 import express from "express";
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
-import OpenAI, { toFile } from "openai";
+import OpenAI from "openai";
 import { db } from "./db";
 import { users, posts, ratings, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
 import { eq, desc, and, or, ne, sql, lt, gt, isNull, isNotNull, inArray } from "drizzle-orm";
@@ -107,18 +107,6 @@ function getGroq(): OpenAI {
   }
   return _groq;
 }
-
-// ── OPENAI (for hair try-on inpainting) ──────────────────────────────────────
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("Missing OPENAI_API_KEY for hair try-on image generation.");
-    _openai = new OpenAI({ apiKey });
-  }
-  return _openai;
-}
-
 
 function hashPassword(p: string): string {
   return crypto.createHash("sha256").update(p + "cutmatch_salt").digest("hex");
@@ -297,27 +285,73 @@ Return exactly 4 recommendations. Output ONLY the JSON object.`;
   throw lastError || new Error("Analysis failed after retries");
 }
 
-const HAIR_TRYON_TIMEOUT_MS = 60_000;
+const HAIR_TRYON_TIMEOUT_MS = 45_000;
+
+function buildPortraitPrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
+  const gender = analysis.gender || "person";
+  const age = analysis.ageRange ? `${analysis.ageRange} year old ` : "";
+  const skin = analysis.skinTone ? `${analysis.skinTone} skin tone, ` : "";
+  const hairColor = analysis.hairColor ? `${analysis.hairColor} hair, ` : "";
+  const face = analysis.faceShape ? `${analysis.faceShape} face shape, ` : "";
+  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
+  const features = analysis.faceFeatures ? `${analysis.faceFeatures}, ` : "";
+  const cut = `${rec.name} hairstyle — ${rec.imagePrompt}`;
+
+  return `Studio portrait photograph of a ${age}${gender} with ${face}${skin}${hairColor}${glasses}${features}${cut}. Front-facing, natural lighting, sharp focus on face and hair, photorealistic, professional headshot, neutral background, high detail`.slice(0, 1000);
+}
+
+function buildPollinationsUrl(prompt: string, seed: number): string {
+  const encoded = encodeURIComponent(prompt);
+  const params = new URLSearchParams({
+    width: "768",
+    height: "768",
+    seed: String(seed),
+    model: "flux",
+    nologo: "true",
+    enhance: "true",
+  });
+  return `https://image.pollinations.ai/prompt/${encoded}?${params.toString()}`;
+}
+
+async function fetchImageBuffer(url: string, timeoutMs: number): Promise<Buffer | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      console.warn(`fetchImageBuffer: HTTP ${res.status} for ${url.slice(0, 80)}...`);
+      return null;
+    }
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.startsWith("image/")) {
+      console.warn(`fetchImageBuffer: non-image content-type "${ct}"`);
+      return null;
+    }
+    const arr = await res.arrayBuffer();
+    const buf = Buffer.from(arr);
+    if (buf.length < 1000) {
+      console.warn(`fetchImageBuffer: buffer too small (${buf.length} bytes)`);
+      return null;
+    }
+    return buf;
+  } catch (err: any) {
+    const reason = err.name === "AbortError" ? "timed out" : err.message;
+    console.warn(`fetchImageBuffer failed: ${reason}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
+  const filename = `${crypto.randomUUID()}.${ext}`;
+  fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
+  return `/uploads/${filename}`;
+}
 
 async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
   try {
-    let mimeType = "image/jpeg";
-    let ext = "jpg";
-    let raw = imageInput;
-
-    if (imageInput.startsWith("data:")) {
-      const header = imageInput.split(",")[0];
-      raw = imageInput.split(",")[1];
-      const mimeMatch = header.match(/data:([^;]+)/);
-      if (mimeMatch) {
-        mimeType = mimeMatch[1];
-        const extMap: Record<string, string> = {
-          "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
-          "image/webp": "webp", "image/gif": "gif",
-        };
-        ext = extMap[mimeType] ?? "jpg";
-      }
-    }
+    const raw = imageInput.startsWith("data:") ? imageInput.split(",")[1] : imageInput;
 
     const cacheKey = hashHairTryOnKey(raw, rec.name);
     const cached = getHairTryOnCache(cacheKey);
@@ -326,30 +360,25 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
       return cached;
     }
 
-    const buf = Buffer.from(raw, "base64");
-    const file = await toFile(buf, `photo.${ext}`, { type: mimeType });
+    const prompt = buildPortraitPrompt(analysis, rec);
+    const seed = parseInt(crypto.createHash("md5").update(raw + rec.name).digest("hex").slice(0, 8), 16);
 
-    const glassesNote = analysis.hasGlasses ? "glasses, " : "";
-    const prompt = `Change only the hairstyle to: ${rec.name} — ${rec.imagePrompt}. Keep the person's face, skin tone, facial features, ${glassesNote}background, and lighting exactly as they appear in the original photo. Do not alter anything except the hair.`.slice(0, 1000);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const url = buildPollinationsUrl(prompt, seed + attempt - 1);
+      const buf = await fetchImageBuffer(url, HAIR_TRYON_TIMEOUT_MS);
+      if (buf) {
+        const localUrl = saveImageBuffer(buf, "jpg");
+        console.log(`Rank ${rec.rank}: saved Pollinations portrait to ${localUrl} (attempt ${attempt})`);
+        setHairTryOnCache(cacheKey, localUrl);
+        return localUrl;
+      }
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+    }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
-
-    const response = await getOpenAI().images.edit(
-      { model: "gpt-image-1", image: file, prompt, n: 1, size: "1024x1024" },
-      { signal: controller.signal }
-    ).finally(() => clearTimeout(timer));
-
-    const b64 = response.data[0]?.b64_json;
-    if (!b64) throw new Error("No image data returned from OpenAI");
-
-    const localUrl = saveImageFile(b64, "png");
-    console.log(`Rank ${rec.rank}: saved OpenAI hair try-on image to ${localUrl}`);
-    setHairTryOnCache(cacheKey, localUrl);
-    return localUrl;
+    console.warn(`Rank ${rec.rank}: Pollinations portrait failed after retries`);
+    return null;
   } catch (err: any) {
-    const reason = err.name === "AbortError" ? "timed out" : err.message;
-    console.warn(`Rank ${rec.rank}: OpenAI hair try-on failed — ${reason}`);
+    console.warn(`Rank ${rec.rank}: hair try-on failed — ${err.message}`);
     return null;
   }
 }
