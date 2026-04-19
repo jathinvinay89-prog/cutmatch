@@ -1,7 +1,7 @@
 import express from "express";
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { db } from "./db";
 import { users, posts, ratings, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
 import { eq, desc, and, or, ne, sql, lt, gt, isNull, isNotNull, inArray } from "drizzle-orm";
@@ -70,12 +70,6 @@ function rewriteImageUrl(url: string | null | undefined, req: Request): string |
   return url;
 }
 
-function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
-  const filename = `${crypto.randomUUID()}.${ext}`;
-  fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
-  return `/uploads/${filename}`;
-}
-
 // ── GROQ AI (free, ultra-fast inference) ─────────────────────────────────────
 // Uses Groq's free API: llama-3.3-70b-versatile for chat, vision models for face analysis.
 let _groq: OpenAI | null = null;
@@ -86,6 +80,17 @@ function getGroq(): OpenAI {
     _groq = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
   }
   return _groq;
+}
+
+// ── OPENAI (for hair try-on inpainting) ──────────────────────────────────────
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error("Missing OPENAI_API_KEY for hair try-on image generation.");
+    _openai = new OpenAI({ apiKey });
+  }
+  return _openai;
 }
 
 
@@ -266,97 +271,53 @@ Return exactly 4 recommendations. Output ONLY the JSON object.`;
   throw lastError || new Error("Analysis failed after retries");
 }
 
-function buildImagePrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
-  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-  return `${analysis.ageRange} ${analysis.gender}, ${analysis.skinTone} skin tone, ${glasses}${rec.name} haircut: ${rec.imagePrompt}. Professional portrait, studio lighting, photorealistic, neutral background.`.slice(0, 500);
-}
+const HAIR_TRYON_TIMEOUT_MS = 60_000;
 
-function buildPollinationsUrl(prompt: string, rank: number): string {
-  const encoded = encodeURIComponent(prompt);
-  const seed = (rank * 123456 + Date.now()) % 999999;
-  return `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&model=turbo&seed=${seed}&nofeed=true`;
-}
-
-async function fetchPollinationsImage(url: string, retries = 2, delayMs = 2000): Promise<Buffer | null> {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const contentType = response.headers.get("content-type") || "";
-      if (!contentType.startsWith("image/")) throw new Error(`Unexpected content-type: ${contentType}`);
-      const arrayBuffer = await response.arrayBuffer();
-      const buf = Buffer.from(arrayBuffer);
-      if (buf.length < 1000) throw new Error("Response too small, likely not a valid image");
-      return buf;
-    } catch (err: any) {
-      console.warn(`Rank fetch attempt ${attempt + 1} failed: ${err.message}`);
-      if (attempt < retries) await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-  return null;
-}
-
-async function fetchFluxImage(prompt: string): Promise<Buffer | null> {
-  const token = process.env.HUGGINGFACE_API_TOKEN;
-  if (!token) {
-    console.warn("FLUX skipped: HUGGINGFACE_API_TOKEN not set, falling back to Pollinations.");
-    return null;
-  }
+async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
   try {
-    const response = await fetch(
-      "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ inputs: prompt }),
-        signal: AbortSignal.timeout(30000),
-      }
-    );
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      if (response.status === 503 || text.toLowerCase().includes("loading") || text.toLowerCase().includes("busy")) {
-        throw new Error("Model busy");
-      }
-      throw new Error(`HuggingFace HTTP ${response.status}: ${text.slice(0, 200)}`);
-    }
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`Unexpected content-type: ${contentType} — ${text.slice(0, 200)}`);
-    }
-    const arrayBuffer = await response.arrayBuffer();
-    const buf = Buffer.from(arrayBuffer);
-    if (buf.length < 1000) throw new Error("Response too small, likely not a valid image");
-    return buf;
-  } catch (err: any) {
-    console.warn(`FLUX fetch failed: ${err.message}`);
-    return null;
-  }
-}
+    let mimeType = "image/jpeg";
+    let ext = "jpg";
+    let raw = imageInput;
 
-async function generateImageUrl(analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
-  const prompt = buildImagePrompt(analysis, rec);
+    if (imageInput.startsWith("data:")) {
+      const header = imageInput.split(",")[0];
+      raw = imageInput.split(",")[1];
+      const mimeMatch = header.match(/data:([^;]+)/);
+      if (mimeMatch) {
+        mimeType = mimeMatch[1];
+        const extMap: Record<string, string> = {
+          "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
+          "image/webp": "webp", "image/gif": "gif",
+        };
+        ext = extMap[mimeType] ?? "jpg";
+      }
+    }
 
-  const fluxBuf = await fetchFluxImage(prompt);
-  if (fluxBuf) {
-    const localUrl = saveImageBuffer(fluxBuf);
-    console.log(`Rank ${rec.rank}: saved FLUX image to ${localUrl}`);
+    const buf = Buffer.from(raw, "base64");
+    const file = await toFile(buf, `photo.${ext}`, { type: mimeType });
+
+    const glassesNote = analysis.hasGlasses ? "glasses, " : "";
+    const prompt = `Change only the hairstyle to: ${rec.name} — ${rec.imagePrompt}. Keep the person's face, skin tone, facial features, ${glassesNote}background, and lighting exactly as they appear in the original photo. Do not alter anything except the hair.`.slice(0, 1000);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
+
+    const response = await getOpenAI().images.edit(
+      { model: "gpt-image-1", image: file, prompt, n: 1, size: "1024x1024" },
+      { signal: controller.signal }
+    ).finally(() => clearTimeout(timer));
+
+    const b64 = response.data[0]?.b64_json;
+    if (!b64) throw new Error("No image data returned from OpenAI");
+
+    const localUrl = saveImageFile(b64, "png");
+    console.log(`Rank ${rec.rank}: saved OpenAI hair try-on image to ${localUrl}`);
     return localUrl;
-  }
-
-  console.log(`Rank ${rec.rank}: falling back to Pollinations...`);
-  const url = buildPollinationsUrl(prompt, rec.rank);
-  const buf = await fetchPollinationsImage(url);
-  if (!buf) {
-    console.warn(`Rank ${rec.rank}: all retries failed, skipping image`);
+  } catch (err: any) {
+    const reason = err.name === "AbortError" ? "timed out" : err.message;
+    console.warn(`Rank ${rec.rank}: OpenAI hair try-on failed — ${reason}`);
     return null;
   }
-  const localUrl = saveImageBuffer(buf);
-  console.log(`Rank ${rec.rank}: saved Pollinations image to ${localUrl}`);
-  return localUrl;
 }
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
@@ -444,15 +405,6 @@ setInterval(checkExpiredPosts, 10 * 60 * 1000);
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
-  if (!process.env.HUGGINGFACE_API_TOKEN) {
-    console.warn(
-      "[image] HUGGINGFACE_API_TOKEN is not set — FLUX.1 schnell image generation is disabled. " +
-      "Falling back to Pollinations for all image requests."
-    );
-  } else {
-    console.log("[image] HUGGINGFACE_API_TOKEN detected — FLUX.1 schnell image generation enabled.");
-  }
-
   // ── STATIC UPLOADS ───────────────────────────────────────────────────────
   app.use("/uploads", express.static(UPLOADS_DIR));
 
@@ -475,17 +427,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { image } = req.body;
       if (!image) return res.status(400).json({ error: "Image required" });
-      const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
+      const imageBase64 = image.includes(",") ? image.split(",")[1] : image;
+      const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${imageBase64}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = await Promise.all(
+      const recsWithImages = await Promise.allSettled(
         analysis.recommendations.map(async (rec) => {
-          const imageUrl = await generateImageUrl(analysis, rec);
+          const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
           return {
             rank: rec.rank, name: rec.name, description: rec.description,
             whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-            generatedImage: rewriteImageUrl(imageUrl, req),
+            generatedImage: rewriteImageUrl(url, req),
           };
+        })
+      ).then(results =>
+        results.map((r, i) => {
+          if (r.status === "fulfilled") return r.value;
+          const rec = analysis.recommendations[i];
+          console.warn(`analyze-simple rank ${rec.rank}: unexpected error — ${r.reason?.message}`);
+          return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: null };
         })
       );
 
@@ -573,13 +533,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })),
       });
 
-      send("status", { message: "Generating your AI looks..." });
+      send("status", { message: "Generating your hair try-on looks..." });
 
       await Promise.allSettled(
         analysis.recommendations.map(async (rec) => {
           try {
-            const imageUrl = await generateImageUrl(analysis, rec);
-            send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(imageUrl, req) });
+            const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
+            send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(url, req) });
           } catch (imgErr: any) {
             console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
             send("image", { rank: rec.rank, generatedImage: null });
