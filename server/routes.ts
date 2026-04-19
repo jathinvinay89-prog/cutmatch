@@ -54,15 +54,16 @@ function saveImageFile(base64Data: string, ext = "png"): string {
   return `/uploads/${filename}`;
 }
 
-function rewriteImageUrl(url: string | null | undefined, req: Request): string | null | undefined {
+function rewriteImageUrl(url: string | null | undefined, _req?: Request): string | null | undefined {
   if (!url) return url;
+  const base = getServerBase();
   if (url.startsWith("/")) {
-    return `${req.protocol}://${req.get("host")}${url}`;
+    return `${base}${url}`;
   }
   if (url.startsWith("http://") || url.startsWith("https://")) {
     try {
       const parsed = new URL(url);
-      return `${req.protocol}://${req.get("host")}${parsed.pathname}${parsed.search}`;
+      return `${base}${parsed.pathname}${parsed.search}`;
     } catch {
       return url;
     }
