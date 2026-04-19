@@ -18,6 +18,31 @@ interface FeedCacheEntry {
 const feedCache = new Map<string, FeedCacheEntry>();
 const FEED_CACHE_TTL_MS = 10_000;
 
+// ── HAIR TRY-ON CACHE ─────────────────────────────────────────────────────────
+interface HairTryOnCacheEntry {
+  url: string;
+  expiresAt: number;
+}
+const hairTryOnCache = new Map<string, HairTryOnCacheEntry>();
+const HAIR_TRYON_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function getHairTryOnCache(key: string): string | null {
+  const entry = hairTryOnCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { hairTryOnCache.delete(key); return null; }
+  const filePath = path.join(UPLOADS_DIR, path.basename(entry.url));
+  if (!fs.existsSync(filePath)) { hairTryOnCache.delete(key); return null; }
+  return entry.url;
+}
+
+function setHairTryOnCache(key: string, url: string): void {
+  hairTryOnCache.set(key, { url, expiresAt: Date.now() + HAIR_TRYON_CACHE_TTL_MS });
+}
+
+function hashHairTryOnKey(imageBase64: string, recName: string): string {
+  return crypto.createHash("sha256").update(imageBase64 + recName).digest("hex");
+}
+
 function getFeedCache(key: string): any | null {
   const entry = feedCache.get(key);
   if (!entry) return null;
@@ -294,6 +319,13 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
       }
     }
 
+    const cacheKey = hashHairTryOnKey(raw, rec.name);
+    const cached = getHairTryOnCache(cacheKey);
+    if (cached) {
+      console.log(`Rank ${rec.rank}: returning cached hair try-on for "${rec.name}"`);
+      return cached;
+    }
+
     const buf = Buffer.from(raw, "base64");
     const file = await toFile(buf, `photo.${ext}`, { type: mimeType });
 
@@ -313,6 +345,7 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
 
     const localUrl = saveImageFile(b64, "png");
     console.log(`Rank ${rec.rank}: saved OpenAI hair try-on image to ${localUrl}`);
+    setHairTryOnCache(cacheKey, localUrl);
     return localUrl;
   } catch (err: any) {
     const reason = err.name === "AbortError" ? "timed out" : err.message;
