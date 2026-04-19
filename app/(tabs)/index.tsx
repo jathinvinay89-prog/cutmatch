@@ -12,6 +12,7 @@ import {
   Modal,
   Dimensions,
   KeyboardAvoidingView,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
@@ -146,12 +147,24 @@ export default function CutMatchScreen() {
     triggerHaptic("success");
   };
 
+  const showPermissionDeniedAlert = (type: "camera" | "photos") => {
+    const title = type === "camera" ? "Camera Access Required" : "Photo Library Access Required";
+    const message =
+      type === "camera"
+        ? "CutMatch needs camera access to take your photo for the hair try-on. Please enable Camera access for CutMatch in your device Settings."
+        : "CutMatch needs access to your photo library to select a photo for the hair try-on. Please enable Photos access for CutMatch in your device Settings.";
+    Alert.alert(title, message, [
+      { text: "Not Now", style: "cancel" },
+      { text: "Open Settings", onPress: () => Linking.openSettings() },
+    ]);
+  };
+
   const pickImage = async (source: "camera" | "gallery") => {
     triggerHaptic("light");
     if (source === "camera" && Platform.OS !== "web") {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Camera Access Needed", "Allow camera access in settings.");
+        showPermissionDeniedAlert("camera");
         return;
       }
       try {
@@ -169,7 +182,7 @@ export default function CutMatchScreen() {
     }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Photo Access Needed", "Allow photo library access in settings.");
+      showPermissionDeniedAlert("photos");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({

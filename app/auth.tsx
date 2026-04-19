@@ -11,6 +11,7 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -114,11 +115,23 @@ export default function AuthScreen() {
 
   const skipAvatar = () => router.replace("/(tabs)");
 
+  const showPermissionDeniedAlert = (type: "camera" | "photos") => {
+    const title = type === "camera" ? "Camera Access Required" : "Photo Library Access Required";
+    const message =
+      type === "camera"
+        ? "CutMatch needs camera access to take your photo for the hair try-on. Please enable Camera access for CutMatch in your device Settings."
+        : "CutMatch needs access to your photo library to select a photo for the hair try-on. Please enable Photos access for CutMatch in your device Settings.";
+    Alert.alert(title, message, [
+      { text: "Not Now", style: "cancel" },
+      { text: "Open Settings", onPress: () => Linking.openSettings() },
+    ]);
+  };
+
   const pickAndUploadPhoto = async (source: "camera" | "gallery") => {
     let result;
     if (source === "camera" && Platform.OS !== "web") {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== "granted") return Alert.alert("Camera permission needed");
+      if (status !== "granted") { showPermissionDeniedAlert("camera"); return; }
       try {
         result = await ImagePicker.launchCameraAsync({
           mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
@@ -126,14 +139,14 @@ export default function AuthScreen() {
       } catch {
         // Camera unavailable (simulator/restricted) — fall back to gallery
         const libStatus = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (libStatus.status !== "granted") return Alert.alert("Photo library permission needed");
+        if (libStatus.status !== "granted") { showPermissionDeniedAlert("photos"); return; }
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
         });
       }
     } else {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") return Alert.alert("Photo library permission needed");
+      if (status !== "granted") { showPermissionDeniedAlert("photos"); return; }
       result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
       });
@@ -163,12 +176,24 @@ export default function AuthScreen() {
           // Camera hardware unavailable (e.g. simulator) — fall back to gallery
           result = undefined;
         }
+      } else {
+        const shouldContinue = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "Camera Access Required",
+            "CutMatch needs camera access to take your selfie for the AI hair try-on. You can still pick a photo from your library, or enable Camera access in Settings.",
+            [
+              { text: "Use Photo Library", onPress: () => resolve(true) },
+              { text: "Open Settings", onPress: () => { Linking.openSettings(); resolve(false); } },
+            ]
+          );
+        });
+        if (!shouldContinue) return;
       }
     }
 
     if (!result) {
       const libStatus = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (libStatus.status !== "granted") return Alert.alert("Permission needed", "Allow photo access to continue.");
+      if (libStatus.status !== "granted") { showPermissionDeniedAlert("photos"); return; }
       result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
       });
