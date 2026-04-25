@@ -300,53 +300,85 @@ function buildPortraitPrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
   return `Studio portrait photograph of a ${age}${gender} with ${face}${skin}${hairColor}${glasses}${features}${cut}. Front-facing, natural lighting, sharp focus on face and hair, photorealistic, professional headshot, neutral background, high detail`.slice(0, 1000);
 }
 
-function buildPollinationsUrl(prompt: string, seed: number): string {
-  const encoded = encodeURIComponent(prompt);
-  const params = new URLSearchParams({
-    width: "768",
-    height: "768",
-    seed: String(seed),
-    model: "flux",
-    nologo: "true",
-    enhance: "true",
-  });
-  return `https://image.pollinations.ai/prompt/${encoded}?${params.toString()}`;
-}
-
-async function fetchImageBuffer(url: string, timeoutMs: number): Promise<Buffer | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) {
-      console.warn(`fetchImageBuffer: HTTP ${res.status} for ${url.slice(0, 80)}...`);
-      return null;
-    }
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.startsWith("image/")) {
-      console.warn(`fetchImageBuffer: non-image content-type "${ct}"`);
-      return null;
-    }
-    const arr = await res.arrayBuffer();
-    const buf = Buffer.from(arr);
-    if (buf.length < 1000) {
-      console.warn(`fetchImageBuffer: buffer too small (${buf.length} bytes)`);
-      return null;
-    }
-    return buf;
-  } catch (err: any) {
-    const reason = err.name === "AbortError" ? "timed out" : err.message;
-    console.warn(`fetchImageBuffer failed: ${reason}`);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
   const filename = `${crypto.randomUUID()}.${ext}`;
   fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
   return `/uploads/${filename}`;
+}
+
+const HF_MODEL = "black-forest-labs/FLUX.1-schnell";
+const HF_API_URL = `https://api-inference.huggingface.co/models/${HF_MODEL}`;
+
+async function fetchHuggingFaceImage(prompt: string, seed: number): Promise<Buffer | null> {
+  const token = process.env.HUGGINGFACE_API_TOKEN;
+  if (!token) {
+    console.warn("HUGGINGFACE_API_TOKEN missing — cannot generate image");
+    return null;
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
+    try {
+      const res = await fetch(HF_API_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "image/png",
+        },
+        body: JSON.stringify({
+          inputs: prompt,
+          parameters: { seed, num_inference_steps: 4, guidance_scale: 0, width: 768, height: 768 },
+          options: { wait_for_model: true, use_cache: false },
+        }),
+        signal: controller.signal,
+      });
+
+      if (res.status === 503) {
+        const body = await res.json().catch(() => ({} as any));
+        const wait = Math.min(((body as any).estimated_time || 20) * 1000, 30_000);
+        console.log(`HF: model loading, waiting ${Math.round(wait / 1000)}s (attempt ${attempt})`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+
+      if (res.status === 429) {
+        console.warn(`HF: rate limited (attempt ${attempt}), backing off`);
+        await new Promise((r) => setTimeout(r, attempt * 3000));
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.warn(`HF attempt ${attempt}: HTTP ${res.status} — ${text.slice(0, 150)}`);
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.startsWith("image/")) {
+        const text = await res.text().catch(() => "");
+        console.warn(`HF attempt ${attempt}: non-image content-type "${ct}" — ${text.slice(0, 150)}`);
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length < 1000) {
+        console.warn(`HF attempt ${attempt}: buffer too small (${buf.length} bytes)`);
+        continue;
+      }
+      return buf;
+    } catch (err: any) {
+      const reason = err.name === "AbortError" ? "timed out" : err.message;
+      console.warn(`HF attempt ${attempt} error: ${reason}`);
+      await new Promise((r) => setTimeout(r, 2000));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
 }
 
 async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
@@ -361,22 +393,18 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
     }
 
     const prompt = buildPortraitPrompt(analysis, rec);
-    const seed = parseInt(crypto.createHash("md5").update(raw + rec.name).digest("hex").slice(0, 8), 16);
+    const seed = parseInt(crypto.createHash("md5").update(raw + rec.name).digest("hex").slice(0, 8), 16) % 2147483647;
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const url = buildPollinationsUrl(prompt, seed + attempt - 1);
-      const buf = await fetchImageBuffer(url, HAIR_TRYON_TIMEOUT_MS);
-      if (buf) {
-        const localUrl = saveImageBuffer(buf, "jpg");
-        console.log(`Rank ${rec.rank}: saved Pollinations portrait to ${localUrl} (attempt ${attempt})`);
-        setHairTryOnCache(cacheKey, localUrl);
-        return localUrl;
-      }
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+    const buf = await fetchHuggingFaceImage(prompt, seed);
+    if (!buf) {
+      console.warn(`Rank ${rec.rank}: HF image generation failed for "${rec.name}"`);
+      return null;
     }
 
-    console.warn(`Rank ${rec.rank}: Pollinations portrait failed after retries`);
-    return null;
+    const localUrl = saveImageBuffer(buf, "png");
+    console.log(`Rank ${rec.rank}: saved HF portrait to ${localUrl}`);
+    setHairTryOnCache(cacheKey, localUrl);
+    return localUrl;
   } catch (err: any) {
     console.warn(`Rank ${rec.rank}: hair try-on failed — ${err.message}`);
     return null;
@@ -494,23 +522,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${imageBase64}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = await Promise.allSettled(
-        analysis.recommendations.map(async (rec) => {
+      const recsWithImages = [];
+      for (const rec of analysis.recommendations) {
+        try {
           const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
-          return {
+          recsWithImages.push({
             rank: rec.rank, name: rec.name, description: rec.description,
             whyItFits: rec.whyItFits, difficulty: rec.difficulty,
             generatedImage: rewriteImageUrl(url, req),
-          };
-        })
-      ).then(results =>
-        results.map((r, i) => {
-          if (r.status === "fulfilled") return r.value;
-          const rec = analysis.recommendations[i];
-          console.warn(`analyze-simple rank ${rec.rank}: unexpected error — ${r.reason?.message}`);
-          return { rank: rec.rank, name: rec.name, description: rec.description, whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: null };
-        })
-      );
+          });
+        } catch (e: any) {
+          console.warn(`analyze-simple rank ${rec.rank}: error — ${e.message}`);
+          recsWithImages.push({
+            rank: rec.rank, name: rec.name, description: rec.description,
+            whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: null,
+          });
+        }
+      }
 
       res.json({
         faceShape: analysis.faceShape,
@@ -598,17 +626,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       send("status", { message: "Generating your hair try-on looks..." });
 
-      await Promise.allSettled(
-        analysis.recommendations.map(async (rec) => {
-          try {
-            const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
-            send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(url, req) });
-          } catch (imgErr: any) {
-            console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
-            send("image", { rank: rec.rank, generatedImage: null });
-          }
-        })
-      );
+      for (const rec of analysis.recommendations) {
+        try {
+          const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
+          send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(url, req) });
+        } catch (imgErr: any) {
+          console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
+          send("image", { rank: rec.rank, generatedImage: null });
+        }
+      }
 
       send("done", {});
       res.end();
