@@ -307,7 +307,7 @@ function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
 }
 
 const HF_MODEL = "black-forest-labs/FLUX.1-schnell";
-const HF_API_URL = `https://api-inference.huggingface.co/models/${HF_MODEL}`;
+const HF_API_URL = `https://router.huggingface.co/hf-inference/models/${HF_MODEL}`;
 
 async function fetchHuggingFaceImage(prompt: string, seed: number): Promise<Buffer | null> {
   const token = process.env.HUGGINGFACE_API_TOKEN;
