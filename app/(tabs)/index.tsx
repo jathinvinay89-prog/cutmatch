@@ -75,6 +75,7 @@ export default function CutMatchScreen() {
   const [caption, setCaption] = useState("");
   const [isSharing, setIsSharing] = useState(false);
   const [isSendingToFriend, setIsSendingToFriend] = useState(false);
+  const [hasSentToFriend, setHasSentToFriend] = useState(false);
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -352,6 +353,7 @@ export default function CutMatchScreen() {
 
   const sendToFriend = async () => {
     if (!currentUser || !analysis || !sendToFriendId) return;
+    if (isSendingToFriend || hasSentToFriend) return;
     setIsSendingToFriend(true);
     try {
       const facePhotoUrl = selectedBase64
@@ -395,9 +397,11 @@ export default function CutMatchScreen() {
       if (!msgRes.ok) throw new Error("Failed to send message");
 
       triggerHaptic("success");
-      Alert.alert("Sent!", `Your CutMatch was sent to ${sendToFriendName || "your friend"}.`, [
-        { text: "OK", onPress: () => { resetToCamera(); router.back(); } },
-      ]);
+      setHasSentToFriend(true);
+      const friendId = sendToFriendId;
+      const friendName = sendToFriendName || "Friend";
+      resetToCamera();
+      router.replace({ pathname: "/chat/[userId]", params: { userId: String(friendId), name: friendName } } as any);
     } catch (err: any) {
       Alert.alert("Error", err.message || "Could not send CutMatch. Try again.");
     }
@@ -631,9 +635,15 @@ export default function CutMatchScreen() {
                   <Ionicons name="close-outline" size={16} color={C.textSecondary} />
                   <Text style={[styles.keepBtnText, { color: C.textSecondary }]}>Cancel</Text>
                 </Pressable>
-                <Pressable style={[styles.shareBtn, { backgroundColor: C.gold }, isSendingToFriend && { opacity: 0.7 }]} onPress={sendToFriend} disabled={isSendingToFriend}>
-                  <Ionicons name="paper-plane-outline" size={16} color={C.background} />
-                  <Text style={[styles.shareBtnText, { color: C.background }]}>{isSendingToFriend ? "Sending..." : `Send to ${sendToFriendName || "Friend"}`}</Text>
+                <Pressable
+                  style={[styles.shareBtn, { backgroundColor: C.gold }, (isSendingToFriend || hasSentToFriend) && { opacity: 0.6 }]}
+                  onPress={sendToFriend}
+                  disabled={isSendingToFriend || hasSentToFriend}
+                >
+                  <Ionicons name={hasSentToFriend ? "checkmark-outline" : "paper-plane-outline"} size={16} color={C.background} />
+                  <Text style={[styles.shareBtnText, { color: C.background }]}>
+                    {hasSentToFriend ? "Sent" : isSendingToFriend ? "Sending..." : `Send to ${sendToFriendName || "Friend"}`}
+                  </Text>
                 </Pressable>
               </>
             ) : (
