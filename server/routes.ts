@@ -3,7 +3,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
-import { users, posts, ratings, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
+import { users, posts, ratings, comments, friendships, directMessages, competitions, competitionVotes } from "@shared/schema";
 import { eq, desc, and, or, ne, sql, lt, gt, isNull, isNotNull, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
@@ -669,7 +669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [user] = await db.select().from(users).where(eq(users.id, parseInt(req.params.id)));
       if (!user) return res.status(404).json({ error: "User not found" });
       const { password: _, ...safeUser } = user;
-      res.json(safeUser);
+      res.json({ ...safeUser, avatarUrl: rewriteImageUrl(safeUser.avatarUrl, req) });
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
@@ -712,7 +712,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const recs = Array.isArray(post.recommendations)
               ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
               : post.recommendations;
-            return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+            return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs, commentCount: post.commentCount ?? 0 };
           };
           const rewriteUser = (user: any) => user ? { ...user, avatarUrl: rewriteImageUrl(user.avatarUrl, req) } : user;
 
@@ -804,21 +804,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         challengeePost: row.challengeePost ?? null,
       }));
 
+      // Fetch comment counts for this page of posts in a single aggregation query
+      const pagePostIds = pagePosts.map((r) => r.post.id);
+      const commentCounts = pagePostIds.length
+        ? await db.select({ postId: comments.postId, count: sql<number>`cast(count(*) as int)` })
+            .from(comments).where(inArray(comments.postId, pagePostIds)).groupBy(comments.postId)
+        : [];
+      const commentCountMap = new Map(commentCounts.map((c) => [c.postId, c.count]));
+
       // Store raw (URL-neutral) data in cache for first page
       if (isFirstPage) {
         setFeedCache(cacheKey, { posts: pagePosts, competitions: enrichedComps, nextCursor });
       }
 
-      const rewritePost = (post: any) => {
+      const rewritePost = (post: any, commentCount?: number) => {
         if (!post) return post;
         const recs = Array.isArray(post.recommendations)
           ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
           : post.recommendations;
-        return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+        return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs, commentCount: commentCount ?? 0 };
       };
       const rewriteUser = (user: any) => user ? { ...user, avatarUrl: rewriteImageUrl(user.avatarUrl, req) } : user;
 
-      const rewrittenPosts = pagePosts.map((row) => ({ post: rewritePost(row.post), user: rewriteUser(row.user) }));
+      const rewrittenPosts = pagePosts.map((row) => ({ post: rewritePost(row.post, commentCountMap.get(row.post.id) ?? 0), user: rewriteUser(row.user) }));
       const rewrittenComps = enrichedComps.map((c) => ({
         ...c,
         challengerUser: rewriteUser(c.challengerUser),
@@ -833,10 +841,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/posts/:id", async (req: Request, res: Response) => {
     try {
-      const [row] = await db
-        .select({ post: posts, user: { id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl } })
-        .from(posts).innerJoin(users, eq(posts.userId, users.id))
-        .where(eq(posts.id, parseInt(req.params.id)));
+      const postId = parseInt(req.params.id);
+      const [[row], countRows] = await Promise.all([
+        db.select({ post: posts, user: { id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl } })
+          .from(posts).innerJoin(users, eq(posts.userId, users.id))
+          .where(eq(posts.id, postId)),
+        db.select({ count: sql<number>`cast(count(*) as int)` }).from(comments).where(eq(comments.postId, postId)),
+      ]);
       if (!row) return res.status(404).json({ error: "Not found" });
       const p = row.post;
       if (p.isExpired || (p.expiresAt && new Date() > p.expiresAt)) {
@@ -845,8 +856,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const recs = Array.isArray(row.post.recommendations)
         ? row.post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
         : row.post.recommendations;
+      const commentCount = countRows[0]?.count ?? 0;
       res.json({
-        post: { ...row.post, facePhotoUrl: rewriteImageUrl(row.post.facePhotoUrl, req), recommendations: recs },
+        post: { ...row.post, facePhotoUrl: rewriteImageUrl(row.post.facePhotoUrl, req), recommendations: recs, commentCount },
         user: { ...row.user, avatarUrl: rewriteImageUrl(row.user.avatarUrl, req) },
       });
     } catch { res.status(500).json({ error: "Server error" }); }
@@ -1029,6 +1041,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
+  // FRIENDSHIP STATUS — must be declared before /api/friends/:userId to avoid route shadowing
+  app.get("/api/friends/status", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.query.userId as string);
+      const targetId = parseInt(req.query.targetId as string);
+      if (!userId || !targetId) return res.status(400).json({ error: "userId and targetId required" });
+      if (userId === targetId) return res.json({ status: "self" });
+      const [friendship] = await db.select().from(friendships).where(
+        or(
+          and(eq(friendships.requesterId, userId), eq(friendships.addresseeId, targetId)),
+          and(eq(friendships.requesterId, targetId), eq(friendships.addresseeId, userId))
+        )
+      );
+      if (!friendship) return res.json({ status: "none" });
+      if (friendship.status === "accepted") return res.json({ status: "friends", friendshipId: friendship.id });
+      if (friendship.requesterId === userId) return res.json({ status: "sent", friendshipId: friendship.id });
+      return res.json({ status: "received", friendshipId: friendship.id });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
   app.get("/api/friends/:userId", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.params.userId);
@@ -1185,6 +1217,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(or(eq(competitions.challengerId, userId), eq(competitions.challengeeId, userId)))
         .orderBy(desc(competitions.createdAt));
       res.json(userComps);
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  // ── COMMENTS ──────────────────────────────────────────────────────────────
+  app.get("/api/posts/:id/comments", async (req: Request, res: Response) => {
+    try {
+      const postId = parseInt(req.params.id);
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const offset = parseInt(req.query.offset as string) || 0;
+      const order = req.query.order === "desc" ? desc(comments.createdAt) : comments.createdAt;
+      const rows = await db
+        .select({
+          comment: comments,
+          user: { id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl },
+        })
+        .from(comments)
+        .innerJoin(users, eq(comments.userId, users.id))
+        .where(eq(comments.postId, postId))
+        .orderBy(order)
+        .limit(limit)
+        .offset(offset);
+      const result = rows.map((row) => ({
+        ...row.comment,
+        user: { ...row.user, avatarUrl: rewriteImageUrl(row.user.avatarUrl, req) },
+      }));
+      res.json({ data: result, offset, limit, hasMore: result.length === limit });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.post("/api/posts/:id/comments", async (req: Request, res: Response) => {
+    try {
+      const postId = parseInt(req.params.id);
+      const { userId, text } = req.body;
+      if (!userId || !text?.trim()) return res.status(400).json({ error: "userId and text required" });
+      const [comment] = await db.insert(comments).values({ postId, userId, text: text.trim() }).returning();
+      const [user] = await db
+        .select({ id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl })
+        .from(users).where(eq(users.id, userId));
+      res.status(201).json({ ...comment, user: user ? { ...user, avatarUrl: rewriteImageUrl(user.avatarUrl, req) } : null });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.delete("/api/comments/:id", async (req: Request, res: Response) => {
+    try {
+      const commentId = parseInt(req.params.id);
+      const { userId } = req.body;
+      const [comment] = await db.select().from(comments).where(eq(comments.id, commentId));
+      if (!comment) return res.status(404).json({ error: "Not found" });
+      if (comment.userId !== userId) return res.status(403).json({ error: "Forbidden" });
+      await db.delete(comments).where(eq(comments.id, commentId));
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  // Cancel sent friend request — userId required to verify ownership
+  app.delete("/api/friends/:id", async (req: Request, res: Response) => {
+    try {
+      const friendshipId = parseInt(req.params.id);
+      const userId = parseInt(req.query.userId as string);
+      if (!userId || isNaN(userId)) return res.status(400).json({ error: "userId required" });
+      const [friendship] = await db.select().from(friendships).where(eq(friendships.id, friendshipId));
+      if (!friendship) return res.status(404).json({ error: "Not found" });
+      if (friendship.requesterId !== userId && friendship.addresseeId !== userId) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await db.delete(friendships).where(eq(friendships.id, friendshipId));
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  // Unfriend — userId required to verify ownership
+  app.post("/api/friends/:id/unfriend", async (req: Request, res: Response) => {
+    try {
+      const friendshipId = parseInt(req.params.id);
+      const userId = parseInt(req.body?.userId);
+      if (!userId || isNaN(userId)) return res.status(400).json({ error: "userId required" });
+      const [friendship] = await db.select().from(friendships).where(eq(friendships.id, friendshipId));
+      if (!friendship) return res.status(404).json({ error: "Not found" });
+      if (friendship.requesterId !== userId && friendship.addresseeId !== userId) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await db.delete(friendships).where(eq(friendships.id, friendshipId));
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  // ── USER PROFILE POSTS (active cutmatches for profile grid) ───────────────
+  app.get("/api/users/:id/profile-posts", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const userPosts = await db.select().from(posts)
+        .where(and(eq(posts.userId, userId), eq(posts.postType, "cutmatch"), eq(posts.isPublic, true), notExpiredNow()))
+        .orderBy(desc(posts.createdAt)).limit(30);
+      const rewritten = userPosts.map((post) => {
+        const recs = Array.isArray(post.recommendations)
+          ? post.recommendations.map((r: any) => ({ ...r, generatedImage: rewriteImageUrl(r.generatedImage, req) }))
+          : post.recommendations;
+        return { ...post, facePhotoUrl: rewriteImageUrl(post.facePhotoUrl, req), recommendations: recs };
+      });
+      res.json(rewritten);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 

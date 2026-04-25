@@ -235,13 +235,19 @@ export default function ChatScreen() {
         <Pressable style={[styles.backBtn, { borderColor: C.border }]} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={22} color={C.text} />
         </Pressable>
-        <View style={[styles.headerAvatar, { backgroundColor: `hsl(${hue}, 50%, 30%)` }]}>
+        <Pressable
+          style={[styles.headerAvatar, { backgroundColor: `hsl(${hue}, 50%, 30%)` }]}
+          onPress={() => !isNaN(otherId) && router.push({ pathname: "/profile/[userId]", params: { userId: String(otherId) } } as any)}
+        >
           <Text style={[styles.headerAvatarText, { color: "#fff" }]}>{initials(otherName)}</Text>
-        </View>
-        <View style={styles.headerInfo}>
+        </Pressable>
+        <Pressable
+          style={styles.headerInfo}
+          onPress={() => !isNaN(otherId) && router.push({ pathname: "/profile/[userId]", params: { userId: String(otherId) } } as any)}
+        >
           <Text style={[styles.headerName, { color: C.text }]}>{otherName}</Text>
           <Text style={[styles.headerOnline, { color: C.textSecondary }]}>CutMatch friend</Text>
-        </View>
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView style={styles.flex} behavior="padding" keyboardVerticalOffset={0}>

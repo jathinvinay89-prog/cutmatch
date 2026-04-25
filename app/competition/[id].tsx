@@ -240,9 +240,11 @@ export default function CompetitionScreen() {
                 </View>
               )}
 
-              <Text style={[styles.compUsername, { color: C.textSecondary }]}>
-                {side.user ? `@${side.user.username}` : "Waiting..."}
-              </Text>
+              <Pressable onPress={() => side.user && router.push({ pathname: "/profile/[userId]", params: { userId: String(side.user.id) } } as any)}>
+                <Text style={[styles.compUsername, { color: C.textSecondary }]}>
+                  {side.user ? `@${side.user.username}` : "Waiting..."}
+                </Text>
+              </Pressable>
 
               <View style={[styles.compImgBox, { backgroundColor: C.surface2 }]}>
                 {side.rec?.generatedImage ? (

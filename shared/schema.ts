@@ -41,6 +41,17 @@ export const ratings = pgTable("ratings", {
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
 });
 
+export const comments = pgTable("comments", {
+  id: serial("id").primaryKey(),
+  postId: integer("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  createdAt: timestamp("created_at").default(sql`now()`).notNull(),
+}, (table) => ({
+  commentsPostIdIdx: index("comments_post_id_idx").on(table.postId),
+  commentsUserIdIdx: index("comments_user_id_idx").on(table.userId),
+}));
+
 export const friendships = pgTable("friendships", {
   id: serial("id").primaryKey(),
   requesterId: integer("requester_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -90,6 +101,7 @@ export const competitionVotes = pgTable("competition_votes", {
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertPostSchema = createInsertSchema(posts).omit({ id: true, createdAt: true });
 export const insertRatingSchema = createInsertSchema(ratings).omit({ id: true, createdAt: true });
+export const insertCommentSchema = createInsertSchema(comments).omit({ id: true, createdAt: true });
 export const insertFriendshipSchema = createInsertSchema(friendships).omit({ id: true, createdAt: true });
 export const insertMessageSchema = createInsertSchema(directMessages).omit({ id: true, createdAt: true });
 export const insertCompetitionSchema = createInsertSchema(competitions).omit({ id: true, createdAt: true });
@@ -99,6 +111,7 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Post = typeof posts.$inferSelect;
 export type InsertPost = z.infer<typeof insertPostSchema>;
 export type Rating = typeof ratings.$inferSelect;
+export type Comment = typeof comments.$inferSelect;
 export type Friendship = typeof friendships.$inferSelect;
 export type DirectMessage = typeof directMessages.$inferSelect;
 export type Competition = typeof competitions.$inferSelect;

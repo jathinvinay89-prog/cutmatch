@@ -60,6 +60,7 @@ function FriendRequestCard({ item, apiBase, onRespond, colors: C }: { item: Frie
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const acceptScale = useRef(new Animated.Value(1)).current;
   const denyScale = useRef(new Animated.Value(1)).current;
+  const goToProfile = () => router.push({ pathname: "/profile/[userId]", params: { userId: String(item.requester.id) } } as any);
 
   const respond = useCallback(async (action: "accept" | "deny") => {
     const scaleRef = action === "accept" ? acceptScale : denyScale;
@@ -80,11 +81,13 @@ function FriendRequestCard({ item, apiBase, onRespond, colors: C }: { item: Frie
 
   return (
     <Animated.View style={[styles.requestCard, { backgroundColor: C.surface, borderColor: C.border, opacity: fadeAnim }]}>
-      <AvatarCircle name={item.requester.displayName} avatarUrl={item.requester.avatarUrl} size={44} />
-      <View style={styles.requestInfo}>
+      <Pressable onPress={goToProfile}>
+        <AvatarCircle name={item.requester.displayName} avatarUrl={item.requester.avatarUrl} size={44} />
+      </Pressable>
+      <Pressable style={styles.requestInfo} onPress={goToProfile}>
         <Text style={[styles.requestName, { color: C.text }]}>{item.requester.displayName}</Text>
         <Text style={[styles.requestSub, { color: C.textSecondary }]}>@{item.requester.username} · wants to be friends</Text>
-      </View>
+      </Pressable>
       <View style={styles.requestActions}>
         <Animated.View style={{ transform: [{ scale: denyScale }] }}>
           <Pressable style={[styles.denyBtn, { backgroundColor: C.surface2, borderColor: C.border }]} onPress={() => respond("deny")}>
@@ -306,10 +309,14 @@ export default function MessagesScreen() {
                 router.push({ pathname: "/chat/[userId]", params: { userId: String(item.id), name: item.displayName } });
               }}
             >
-              <AvatarCircle name={item.displayName} avatarUrl={item.avatarUrl} size={48} />
+              <Pressable onPress={() => router.push({ pathname: "/profile/[userId]", params: { userId: String(item.id) } } as any)}>
+                <AvatarCircle name={item.displayName} avatarUrl={item.avatarUrl} size={48} />
+              </Pressable>
               <View style={styles.friendInfo}>
                 <View style={styles.rowTop}>
-                  <Text style={[styles.friendName, { color: C.text }]}>{item.displayName}</Text>
+                  <Pressable onPress={() => router.push({ pathname: "/profile/[userId]", params: { userId: String(item.id) } } as any)}>
+                    <Text style={[styles.friendName, { color: C.text }]}>{item.displayName}</Text>
+                  </Pressable>
                   <Text style={[styles.timestamp, { color: C.textSecondary }]}>{todayLabel}</Text>
                 </View>
                 <Text style={[styles.lastMessage, { color: C.textSecondary }]} numberOfLines={1}>Tap to chat</Text>

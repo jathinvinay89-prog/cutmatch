@@ -33,6 +33,8 @@ function RootLayoutNav() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="chat/[userId]" options={{ animation: "slide_from_right" }} />
       <Stack.Screen name="competition/[id]" options={{ animation: "slide_from_right" }} />
+      <Stack.Screen name="cutmatch/[id]" options={{ animation: "slide_from_right" }} />
+      <Stack.Screen name="profile/[userId]" options={{ animation: "slide_from_right" }} />
     </Stack>
   );
 }
