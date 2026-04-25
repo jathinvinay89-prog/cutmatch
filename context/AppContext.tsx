@@ -17,6 +17,7 @@ export interface AppUser {
   displayName: string;
   avatarUrl: string | null;
   faceShape?: string | null;
+  bio?: string | null;
 }
 
 export interface AppSettings {
@@ -60,6 +61,10 @@ interface AppContextValue {
   register: (username: string, password: string, displayName: string) => Promise<AppUser>;
   logout: () => void;
   uploadAvatar: (userId: number, avatarUrl: string) => Promise<AppUser>;
+  updateProfile: (
+    userId: number,
+    updates: { displayName?: string; bio?: string; avatarUrl?: string }
+  ) => Promise<AppUser>;
   apiBase: string;
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
@@ -165,7 +170,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ avatarUrl }),
+      body: JSON.stringify({ avatarUrl, requesterId: userId }),
     });
     if (!res.ok) throw new Error("Failed to upload avatar");
     const user = await res.json();
@@ -173,8 +178,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return user;
   };
 
+  const updateProfile = async (
+    userId: number,
+    updates: { displayName?: string; bio?: string; avatarUrl?: string }
+  ): Promise<AppUser> => {
+    const url = new URL(`/api/users/${userId}`, apiBase).toString();
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...updates, requesterId: userId }),
+    });
+    if (!res.ok) {
+      let message = "Failed to update profile";
+      try { const err = await res.json(); if (err?.error) message = err.error; } catch {}
+      throw new Error(message);
+    }
+    const user = await res.json();
+    if (currentUser && currentUser.id === userId) {
+      setCurrentUser({
+        ...currentUser,
+        displayName: user.displayName ?? currentUser.displayName,
+        avatarUrl: user.avatarUrl ?? currentUser.avatarUrl,
+        bio: user.bio ?? currentUser.bio,
+      });
+    }
+    return user;
+  };
+
   const value = useMemo(
-    () => ({ currentUser, isLoadingUser, setCurrentUser, createUser, login, register, logout, uploadAvatar, apiBase, settings, updateSettings, colors, aiAdvisorMessages, setAiAdvisorMessages }),
+    () => ({ currentUser, isLoadingUser, setCurrentUser, createUser, login, register, logout, uploadAvatar, updateProfile, apiBase, settings, updateSettings, colors, aiAdvisorMessages, setAiAdvisorMessages }),
     [currentUser, isLoadingUser, apiBase, settings, aiAdvisorMessages]
   );
 

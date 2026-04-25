@@ -649,7 +649,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/users/:id/avatar", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.params.id);
-      let { avatarUrl } = req.body;
+      let { avatarUrl, requesterId } = req.body;
+      const reqId = Number(requesterId);
+      if (!Number.isFinite(reqId) || reqId !== userId) {
+        return res.status(403).json({ error: "You can only update your own profile" });
+      }
       if (!avatarUrl) return res.status(400).json({ error: "avatarUrl required" });
       // If it's a base64 data URL, save to file
       if (avatarUrl.startsWith("data:")) {
@@ -671,6 +675,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { password: _, ...safeUser } = user;
       res.json({ ...safeUser, avatarUrl: rewriteImageUrl(safeUser.avatarUrl, req) });
     } catch { res.status(500).json({ error: "Server error" }); }
+  });
+
+  app.patch("/api/users/:id", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+      const { displayName, bio, avatarUrl, requesterId } = req.body ?? {};
+      const reqId = Number(requesterId);
+      if (!Number.isFinite(reqId) || reqId !== userId) {
+        return res.status(403).json({ error: "You can only update your own profile" });
+      }
+      const updates: Partial<{ displayName: string; bio: string; avatarUrl: string }> = {};
+
+      if (displayName !== undefined) {
+        if (typeof displayName !== "string") return res.status(400).json({ error: "displayName must be a string" });
+        const trimmed = displayName.trim();
+        if (trimmed.length === 0) return res.status(400).json({ error: "displayName cannot be empty" });
+        if (trimmed.length > 50) return res.status(400).json({ error: "displayName too long (max 50)" });
+        updates.displayName = trimmed;
+      }
+      if (bio !== undefined) {
+        if (typeof bio !== "string") return res.status(400).json({ error: "bio must be a string" });
+        if (bio.length > 280) return res.status(400).json({ error: "bio too long (max 280)" });
+        updates.bio = bio;
+      }
+      if (avatarUrl !== undefined && avatarUrl !== null) {
+        if (typeof avatarUrl !== "string") return res.status(400).json({ error: "avatarUrl must be a string" });
+        let nextAvatar = avatarUrl;
+        if (nextAvatar.startsWith("data:")) {
+          const b64 = nextAvatar.split(",")[1];
+          nextAvatar = saveImageFile(b64, "jpg");
+        }
+        updates.avatarUrl = nextAvatar;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No fields to update" });
+      }
+
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();
+      if (!updated) return res.status(404).json({ error: "User not found" });
+      invalidateFeedCache();
+      const { password: _, ...safeUser } = updated;
+      res.json({ ...safeUser, avatarUrl: rewriteImageUrl(safeUser.avatarUrl, req) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Server error" });
+    }
   });
 
   app.post("/api/users", async (req: Request, res: Response) => {
