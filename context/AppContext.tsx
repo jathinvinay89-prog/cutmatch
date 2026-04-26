@@ -66,6 +66,8 @@ interface AppContextValue {
     updates: { displayName?: string; bio?: string; avatarUrl?: string }
   ) => Promise<AppUser>;
   apiBase: string;
+  authToken: string | null;
+  authHeaders: () => Record<string, string>;
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
   colors: typeof DarkColors;
@@ -77,6 +79,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUserState] = useState<AppUser | null>(null);
+  const [authToken, setAuthTokenState] = useState<string | null>(null);
   const [isLoadingUser, setIsLoadingUser] = useState(true);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [aiAdvisorMessages, setAiAdvisorMessages] = useState<AIAdvisorMessage[]>([]);
@@ -87,12 +90,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [stored, storedSettings] = await Promise.all([
+        const [stored, storedSettings, storedToken] = await Promise.all([
           AsyncStorage.getItem("cutmatch_user"),
           AsyncStorage.getItem("cutmatch_settings"),
+          AsyncStorage.getItem("cutmatch_auth_token"),
         ]);
         if (stored) setCurrentUserState(JSON.parse(stored));
         if (storedSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(storedSettings) });
+        if (storedToken) setAuthTokenState(storedToken);
       } catch {}
       setIsLoadingUser(false);
     })();
@@ -105,6 +110,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } else {
       AsyncStorage.removeItem("cutmatch_user");
     }
+  };
+
+  const setAuthToken = (token: string | null) => {
+    setAuthTokenState(token);
+    if (token) {
+      AsyncStorage.setItem("cutmatch_auth_token", token);
+    } else {
+      AsyncStorage.removeItem("cutmatch_auth_token");
+    }
+  };
+
+  const authHeaders = (): Record<string, string> => {
+    return authToken ? { Authorization: `Bearer ${authToken}` } : {};
   };
 
   const updateSettings = (patch: Partial<AppSettings>) => {
@@ -140,8 +158,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const err = await res.json();
       throw new Error(err.error || "Failed to register");
     }
-    const user = await res.json();
+    const { authToken: token, ...user } = await res.json();
     setCurrentUser(user);
+    if (token) setAuthToken(token);
     return user;
   };
 
@@ -156,13 +175,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const err = await res.json();
       throw new Error(err.error || "Failed to login");
     }
-    const user = await res.json();
+    const { authToken: token, ...user } = await res.json();
     setCurrentUser(user);
+    if (token) setAuthToken(token);
     return user;
   };
 
   const logout = () => {
     setCurrentUser(null);
+    setAuthToken(null);
   };
 
   const uploadAvatar = async (userId: number, avatarUrl: string): Promise<AppUser> => {
@@ -206,8 +227,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const value = useMemo(
-    () => ({ currentUser, isLoadingUser, setCurrentUser, createUser, login, register, logout, uploadAvatar, updateProfile, apiBase, settings, updateSettings, colors, aiAdvisorMessages, setAiAdvisorMessages }),
-    [currentUser, isLoadingUser, apiBase, settings, aiAdvisorMessages]
+    () => ({ currentUser, isLoadingUser, setCurrentUser, createUser, login, register, logout, uploadAvatar, updateProfile, apiBase, authToken, authHeaders, settings, updateSettings, colors, aiAdvisorMessages, setAiAdvisorMessages }),
+    [currentUser, isLoadingUser, apiBase, authToken, settings, aiAdvisorMessages]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

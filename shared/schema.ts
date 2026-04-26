@@ -10,8 +10,11 @@ export const users = pgTable("users", {
   password: text("password").notNull().default(""),
   avatarUrl: text("avatar_url"),
   bio: text("bio").default(""),
+  authToken: text("auth_token"),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
-});
+}, (table) => ({
+  usersAuthTokenIdx: index("users_auth_token_idx").on(table.authToken),
+}));
 
 export const posts = pgTable("posts", {
   id: serial("id").primaryKey(),

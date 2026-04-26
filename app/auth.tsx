@@ -43,7 +43,7 @@ interface HaircutOption {
 
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
-  const { login, uploadAvatar, setCurrentUser, apiBase } = useApp();
+  const { login, register, uploadAvatar, apiBase } = useApp();
   const [step, setStep] = useState<AuthStep>("welcome");
 
   const [username, setUsername] = useState("");
@@ -83,17 +83,8 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       const name = displayName.trim() || username.trim();
-      const url = new URL("/api/auth/register", apiBase).toString();
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password, displayName: name }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Registration failed");
-
-      setCurrentUser(data);
-      setPendingUser({ id: data.id });
+      const user = await register(username.trim(), password, name);
+      setPendingUser({ id: user.id });
       setStep("avatar_choice");
     } catch (e: any) {
       Alert.alert("Error", e.message || "Registration failed");
