@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Stack, Redirect } from "expo-router";
+import { Stack, router } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -20,9 +20,12 @@ SplashScreen.preventAutoHideAsync();
 function RootLayoutNav() {
   const { currentUser, isLoadingUser } = useApp();
 
-  if (!isLoadingUser && !currentUser) {
-    return <Redirect href={"/auth" as any} />;
-  }
+  useEffect(() => {
+    if (isLoadingUser) return;
+    if (!currentUser) {
+      router.replace("/auth" as any);
+    }
+  }, [currentUser, isLoadingUser]);
 
   return (
     <Stack screenOptions={{ headerShown: false, animation: "fade" }}>

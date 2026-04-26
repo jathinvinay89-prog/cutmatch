@@ -113,36 +113,6 @@ function hashPassword(p: string): string {
   return crypto.createHash("sha256").update(p + "cutmatch_salt").digest("hex");
 }
 
-function generateAuthToken(): string {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-interface AuthedRequest extends Request {
-  authUserId?: number;
-}
-
-function extractBearerToken(req: Request): string | null {
-  const header = req.header("authorization") || req.header("Authorization");
-  if (!header) return null;
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (!match) return null;
-  const token = match[1].trim();
-  return token.length > 0 ? token : null;
-}
-
-async function requireAuth(req: AuthedRequest, res: Response, next: Function) {
-  try {
-    const token = extractBearerToken(req);
-    if (!token) return res.status(401).json({ error: "Authentication required" });
-    const [user] = await db.select({ id: users.id }).from(users).where(eq(users.authToken, token));
-    if (!user) return res.status(401).json({ error: "Invalid or expired session" });
-    req.authUserId = user.id;
-    next();
-  } catch {
-    return res.status(401).json({ error: "Authentication failed" });
-  }
-}
-
 interface HaircutRec {
   rank: number;
   name: string;
@@ -596,12 +566,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (existing) return res.status(409).json({ error: "Username already taken" });
 
       const name = (displayName || clean).trim();
-      const authToken = generateAuthToken();
       const [user] = await db.insert(users)
-        .values({ username: clean, displayName: name, password: hashPassword(password), authToken })
+        .values({ username: clean, displayName: name, password: hashPassword(password) })
         .returning();
-      const { password: _, authToken: __t, ...safeUser } = user;
-      res.status(201).json({ ...safeUser, authToken });
+      const { password: _, ...safeUser } = user;
+      res.status(201).json(safeUser);
     } catch (err: any) {
       if (err.message?.includes("unique")) return res.status(409).json({ error: "Username already taken" });
       res.status(500).json({ error: "Server error" });
@@ -617,11 +586,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) return res.status(401).json({ error: "Invalid username or password" });
       const hashed = hashPassword(password);
       if (user.password !== hashed && user.password !== "") return res.status(401).json({ error: "Invalid username or password" });
-      // Issue a fresh auth token on every login so old devices are invalidated
-      const authToken = generateAuthToken();
-      await db.update(users).set({ authToken }).where(eq(users.id, user.id));
-      const { password: _, authToken: __t, ...safeUser } = user;
-      res.json({ ...safeUser, authToken });
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
@@ -683,11 +649,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/users/:id/avatar", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.params.id);
-      let { avatarUrl, requesterId } = req.body;
-      const reqId = Number(requesterId);
-      if (!Number.isFinite(reqId) || reqId !== userId) {
-        return res.status(403).json({ error: "You can only update your own profile" });
-      }
+      let { avatarUrl } = req.body;
       if (!avatarUrl) return res.status(400).json({ error: "avatarUrl required" });
       // If it's a base64 data URL, save to file
       if (avatarUrl.startsWith("data:")) {
@@ -696,7 +658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const [updated] = await db.update(users).set({ avatarUrl }).where(eq(users.id, userId)).returning();
       if (!updated) return res.status(404).json({ error: "User not found" });
-      const { password: _, authToken: __t, ...safeUser } = updated;
+      const { password: _, ...safeUser } = updated;
       res.json(safeUser);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -706,63 +668,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const [user] = await db.select().from(users).where(eq(users.id, parseInt(req.params.id)));
       if (!user) return res.status(404).json({ error: "User not found" });
-      const { password: _, authToken: __t, ...safeUser } = user;
+      const { password: _, ...safeUser } = user;
       res.json({ ...safeUser, avatarUrl: rewriteImageUrl(safeUser.avatarUrl, req) });
     } catch { res.status(500).json({ error: "Server error" }); }
-  });
-
-  app.patch("/api/users/:id", async (req: Request, res: Response) => {
-    try {
-      const userId = parseInt(req.params.id);
-      if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
-      const { displayName, bio, avatarUrl, requesterId } = req.body ?? {};
-      const reqId = Number(requesterId);
-      if (!Number.isFinite(reqId) || reqId !== userId) {
-        return res.status(403).json({ error: "You can only update your own profile" });
-      }
-      const updates: Partial<{ displayName: string; bio: string; avatarUrl: string }> = {};
-
-      if (displayName !== undefined) {
-        if (typeof displayName !== "string") return res.status(400).json({ error: "displayName must be a string" });
-        const trimmed = displayName.trim();
-        if (trimmed.length === 0) return res.status(400).json({ error: "displayName cannot be empty" });
-        if (trimmed.length > 50) return res.status(400).json({ error: "displayName too long (max 50)" });
-        updates.displayName = trimmed;
-      }
-      if (bio !== undefined) {
-        if (typeof bio !== "string") return res.status(400).json({ error: "bio must be a string" });
-        if (bio.length > 280) return res.status(400).json({ error: "bio too long (max 280)" });
-        updates.bio = bio;
-      }
-      if (avatarUrl !== undefined && avatarUrl !== null) {
-        if (typeof avatarUrl !== "string") return res.status(400).json({ error: "avatarUrl must be a string" });
-        let nextAvatar = avatarUrl;
-        if (nextAvatar.startsWith("data:")) {
-          const b64 = nextAvatar.split(",")[1];
-          nextAvatar = saveImageFile(b64, "jpg");
-        }
-        updates.avatarUrl = nextAvatar;
-      }
-
-      if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ error: "No fields to update" });
-      }
-
-      const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();
-      if (!updated) return res.status(404).json({ error: "User not found" });
-      invalidateFeedCache();
-      const { password: _, authToken: __t, ...safeUser } = updated;
-      res.json({ ...safeUser, avatarUrl: rewriteImageUrl(safeUser.avatarUrl, req) });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || "Server error" });
-    }
   });
 
   app.post("/api/users", async (req: Request, res: Response) => {
     try {
       const { username, displayName } = req.body;
       const [user] = await db.insert(users).values({ username, displayName, password: "" }).returning();
-      const { password: _, authToken: __t, ...safeUser } = user;
+      const { password: _, ...safeUser } = user;
       res.status(201).json(safeUser);
     } catch (err: any) {
       if (err.message?.includes("unique")) return res.status(409).json({ error: "Username taken" });
@@ -774,7 +689,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const [user] = await db.select().from(users).where(eq(users.username, req.params.username));
       if (!user) return res.status(404).json({ error: "Not found" });
-      const { password: _, authToken: __t, ...safeUser } = user;
+      const { password: _, ...safeUser } = user;
       res.json(safeUser);
     } catch { res.status(500).json({ error: "Server error" }); }
   });
@@ -1037,15 +952,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ── RATINGS ───────────────────────────────────────────────────────────────
-  app.post("/api/posts/:id/rate", requireAuth, async (req: AuthedRequest, res: Response) => {
+  app.post("/api/posts/:id/rate", async (req: Request, res: Response) => {
     try {
-      const { rank } = req.body;
-      const userId = req.authUserId!;
+      const { userId, rank } = req.body;
       const postId = parseInt(req.params.id);
-      if (!Number.isFinite(postId)) return res.status(400).json({ error: "Invalid post id" });
-      if (typeof rank !== "number" || !Number.isInteger(rank) || rank < 1 || rank > 4) {
-        return res.status(400).json({ error: "rank must be an integer 1-4" });
-      }
 
       // Check if post exists and is not expired
       const [post] = await db.select().from(posts).where(eq(posts.id, postId));
@@ -1336,24 +1246,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
-  app.post("/api/posts/:id/comments", requireAuth, async (req: AuthedRequest, res: Response) => {
+  app.post("/api/posts/:id/comments", async (req: Request, res: Response) => {
     try {
       const postId = parseInt(req.params.id);
-      const { text } = req.body;
-      const userId = req.authUserId!;
-      if (!Number.isFinite(postId)) return res.status(400).json({ error: "Invalid post id" });
-      if (typeof text !== "string" || !text.trim()) return res.status(400).json({ error: "text required" });
-      const trimmed = text.trim();
-      if (trimmed.length > 300) return res.status(400).json({ error: "Comment too long (max 300)" });
-
-      // Confirm post exists and is not expired
-      const [post] = await db.select().from(posts).where(eq(posts.id, postId));
-      if (!post) return res.status(404).json({ error: "Post not found" });
-      if (post.isExpired || (post.expiresAt && new Date() > post.expiresAt)) {
-        return res.status(410).json({ error: "Post has expired" });
-      }
-
-      const [comment] = await db.insert(comments).values({ postId, userId, text: trimmed }).returning();
+      const { userId, text } = req.body;
+      if (!userId || !text?.trim()) return res.status(400).json({ error: "userId and text required" });
+      const [comment] = await db.insert(comments).values({ postId, userId, text: text.trim() }).returning();
       const [user] = await db
         .select({ id: users.id, username: users.username, displayName: users.displayName, avatarUrl: users.avatarUrl })
         .from(users).where(eq(users.id, userId));
@@ -1361,11 +1259,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Server error" }); }
   });
 
-  app.delete("/api/comments/:id", requireAuth, async (req: AuthedRequest, res: Response) => {
+  app.delete("/api/comments/:id", async (req: Request, res: Response) => {
     try {
       const commentId = parseInt(req.params.id);
-      const userId = req.authUserId!;
-      if (!Number.isFinite(commentId)) return res.status(400).json({ error: "Invalid comment id" });
+      const { userId } = req.body;
       const [comment] = await db.select().from(comments).where(eq(comments.id, commentId));
       if (!comment) return res.status(404).json({ error: "Not found" });
       if (comment.userId !== userId) return res.status(403).json({ error: "Forbidden" });

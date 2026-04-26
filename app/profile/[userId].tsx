@@ -19,7 +19,6 @@ import { useApp } from "@/context/AppContext";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { fetch } from "expo/fetch";
 import { isLiquidGlass, LG_BLUR_INTENSITY, LG_BORDER_GLOW, LG_SURFACE_BG_DARK, LG_SURFACE_BG_LIGHT } from "@/lib/liquidGlass";
-import { EditProfileSheet } from "@/components/EditProfileSheet";
 
 const Haptics = Platform.OS !== "web" ? require("expo-haptics") : null;
 
@@ -155,7 +154,6 @@ export default function ProfileScreen() {
   const isDark = C.background === "#0A0A0A";
   const glassBg = isDark ? LG_SURFACE_BG_DARK : LG_SURFACE_BG_LIGHT;
   const isOwnProfile = currentUser?.id === profileUserId;
-  const [editVisible, setEditVisible] = useState(false);
 
   const { data: profileUser, isLoading: userLoading, refetch: refetchUser } = useQuery({
     queryKey: ["/api/users", profileUserId],
@@ -295,10 +293,7 @@ export default function ProfileScreen() {
           {isOwnProfile ? (
             <Pressable
               style={[p.editBtn, { borderColor: C.border }]}
-              onPress={() => {
-                Haptics?.selectionAsync?.();
-                setEditVisible(true);
-              }}
+              onPress={() => router.push("/(tabs)/settings" as any)}
             >
               <Ionicons name="pencil-outline" size={15} color={C.text} />
               <Text style={[p.editBtnText, { color: C.text }]}>Edit Profile</Text>
@@ -355,19 +350,6 @@ export default function ProfileScreen() {
           )}
         </View>
       </ScrollView>
-
-      {isOwnProfile && profileUser && (
-        <EditProfileSheet
-          visible={editVisible}
-          onClose={() => setEditVisible(false)}
-          user={profileUser}
-          onSaved={() => {
-            refetchUser();
-            qc.invalidateQueries({ queryKey: ["/api/users", profileUserId] });
-            qc.invalidateQueries({ queryKey: ["/api/feed"] });
-          }}
-        />
-      )}
     </View>
   );
 }

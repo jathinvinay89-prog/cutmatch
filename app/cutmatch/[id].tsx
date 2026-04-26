@@ -66,7 +66,7 @@ function ImageWithFallback({ uri, style, fallbackSize = 16, borderColor = "#333"
 
 export default function CutmatchDetailScreen() {
   const insets = useSafeAreaInsets();
-  const { currentUser, apiBase, colors: C, authHeaders } = useApp();
+  const { currentUser, apiBase, colors: C } = useApp();
   const params = useLocalSearchParams<{ id: string }>();
   const postId = parseInt(params.id);
   const qc = useQueryClient();
@@ -107,15 +107,11 @@ export default function CutmatchDetailScreen() {
     setUserRank(rank);
     Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyle?.Light);
     try {
-      const res = await fetch(new URL(`/api/posts/${postId}/rate`, apiBase).toString(), {
+      await fetch(new URL(`/api/posts/${postId}/rate`, apiBase).toString(), {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ rank }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id, rank }),
       });
-      if (res.status === 401) {
-        setUserRank(null);
-        Alert.alert("Please sign in again", "Your session has expired. Please log in to vote.");
-      }
     } catch {}
   };
 
@@ -125,15 +121,13 @@ export default function CutmatchDetailScreen() {
     try {
       const res = await fetch(new URL(`/api/posts/${postId}/comments`, apiBase).toString(), {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ text: commentText.trim() }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id, text: commentText.trim() }),
       });
       if (res.ok) {
         setCommentText("");
         qc.invalidateQueries({ queryKey: ["/api/posts", postId, "comments"] });
         refetchComments();
-      } else if (res.status === 401) {
-        Alert.alert("Please sign in again", "Your session has expired. Please log in to comment.");
       }
     } catch {}
     setSubmittingComment(false);
@@ -146,14 +140,11 @@ export default function CutmatchDetailScreen() {
       {
         text: "Delete", style: "destructive", onPress: async () => {
           try {
-            const res = await fetch(new URL(`/api/comments/${commentId}`, apiBase).toString(), {
+            await fetch(new URL(`/api/comments/${commentId}`, apiBase).toString(), {
               method: "DELETE",
-              headers: { "Content-Type": "application/json", ...authHeaders() },
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId: currentUser.id }),
             });
-            if (res.status === 401) {
-              Alert.alert("Please sign in again", "Your session has expired.");
-              return;
-            }
             qc.invalidateQueries({ queryKey: ["/api/posts", postId, "comments"] });
             refetchComments();
           } catch {}
