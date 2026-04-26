@@ -88,6 +88,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const colors = settings.isDarkMode ? DarkColors : LightColors;
 
   useEffect(() => {
+    let isMounted = true;
     (async () => {
       try {
         const [stored, storedSettings, storedToken] = await Promise.all([
@@ -95,12 +96,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           AsyncStorage.getItem("cutmatch_settings"),
           AsyncStorage.getItem("cutmatch_auth_token"),
         ]);
+        if (!isMounted) return;
         if (stored) setCurrentUserState(JSON.parse(stored));
         if (storedSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(storedSettings) });
         if (storedToken) setAuthTokenState(storedToken);
       } catch {}
-      setIsLoadingUser(false);
+      if (isMounted) setIsLoadingUser(false);
     })();
+    return () => { isMounted = false; };
   }, []);
 
   const setCurrentUser = (user: AppUser | null) => {
