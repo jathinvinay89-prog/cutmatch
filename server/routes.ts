@@ -9,6 +9,7 @@ import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { generateImageBuffer } from "./replit_integrations/image/client";
 
 // ── FEED CACHE ────────────────────────────────────────────────────────────────
 interface FeedCacheEntry {
@@ -307,76 +308,24 @@ function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
   return `/uploads/${filename}`;
 }
 
-const HF_MODEL = "black-forest-labs/FLUX.1-schnell";
-const HF_API_URL = `https://router.huggingface.co/hf-inference/models/${HF_MODEL}`;
-
-async function fetchHuggingFaceImage(prompt: string, seed: number): Promise<Buffer | null> {
-  const token = process.env.HUGGINGFACE_API_TOKEN;
-  if (!token) {
-    console.warn("HUGGINGFACE_API_TOKEN missing — cannot generate image");
-    return null;
-  }
-
+async function fetchOpenAIImage(prompt: string): Promise<Buffer | null> {
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
     try {
-      const res = await fetch(HF_API_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "image/png",
-        },
-        body: JSON.stringify({
-          inputs: prompt,
-          parameters: { seed, num_inference_steps: 4, guidance_scale: 0, width: 768, height: 768 },
-          options: { wait_for_model: true, use_cache: false },
-        }),
-        signal: controller.signal,
-      });
-
-      if (res.status === 503) {
-        const body = await res.json().catch(() => ({} as any));
-        const wait = Math.min(((body as any).estimated_time || 20) * 1000, 30_000);
-        console.log(`HF: model loading, waiting ${Math.round(wait / 1000)}s (attempt ${attempt})`);
-        await new Promise((r) => setTimeout(r, wait));
-        continue;
-      }
-
-      if (res.status === 429) {
-        console.warn(`HF: rate limited (attempt ${attempt}), backing off`);
-        await new Promise((r) => setTimeout(r, attempt * 3000));
-        continue;
-      }
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.warn(`HF attempt ${attempt}: HTTP ${res.status} — ${text.slice(0, 150)}`);
+      const buf = await Promise.race([
+        generateImageBuffer(prompt, "1024x1024"),
+        new Promise<Buffer>((_, reject) =>
+          setTimeout(() => reject(new Error("timed out")), HAIR_TRYON_TIMEOUT_MS)
+        ),
+      ]);
+      if (!buf || buf.length < 1000) {
+        console.warn(`OpenAI image attempt ${attempt}: buffer too small (${buf?.length ?? 0} bytes)`);
         await new Promise((r) => setTimeout(r, 2000));
-        continue;
-      }
-
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.startsWith("image/")) {
-        const text = await res.text().catch(() => "");
-        console.warn(`HF attempt ${attempt}: non-image content-type "${ct}" — ${text.slice(0, 150)}`);
-        await new Promise((r) => setTimeout(r, 2000));
-        continue;
-      }
-
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length < 1000) {
-        console.warn(`HF attempt ${attempt}: buffer too small (${buf.length} bytes)`);
         continue;
       }
       return buf;
     } catch (err: any) {
-      const reason = err.name === "AbortError" ? "timed out" : err.message;
-      console.warn(`HF attempt ${attempt} error: ${reason}`);
+      console.warn(`OpenAI image attempt ${attempt} error: ${err.message}`);
       await new Promise((r) => setTimeout(r, 2000));
-    } finally {
-      clearTimeout(timer);
     }
   }
   return null;
@@ -394,16 +343,15 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
     }
 
     const prompt = buildPortraitPrompt(analysis, rec);
-    const seed = parseInt(crypto.createHash("md5").update(raw + rec.name).digest("hex").slice(0, 8), 16) % 2147483647;
 
-    const buf = await fetchHuggingFaceImage(prompt, seed);
+    const buf = await fetchOpenAIImage(prompt);
     if (!buf) {
-      console.warn(`Rank ${rec.rank}: HF image generation failed for "${rec.name}"`);
+      console.warn(`Rank ${rec.rank}: OpenAI image generation failed for "${rec.name}"`);
       return null;
     }
 
     const localUrl = saveImageBuffer(buf, "png");
-    console.log(`Rank ${rec.rank}: saved HF portrait to ${localUrl}`);
+    console.log(`Rank ${rec.rank}: saved OpenAI portrait to ${localUrl}`);
     setHairTryOnCache(cacheKey, localUrl);
     return localUrl;
   } catch (err: any) {
