@@ -9,7 +9,6 @@ import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { generateImageBuffer } from "./replit_integrations/image/client";
 
 // ── FEED CACHE ────────────────────────────────────────────────────────────────
 interface FeedCacheEntry {
@@ -308,24 +307,73 @@ function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
   return `/uploads/${filename}`;
 }
 
-async function fetchOpenAIImage(prompt: string): Promise<Buffer | null> {
+// ── POLLINATIONS.AI IMAGE GENERATION ─────────────────────────────────────────
+// Free, no API key required. Uses the FLUX model by default.
+// Docs: https://github.com/pollinations/pollinations/blob/master/APIDOCS.md
+const POLLINATIONS_MODEL = "flux";
+const POLLINATIONS_WIDTH = 768;
+const POLLINATIONS_HEIGHT = 768;
+
+function buildPollinationsUrl(prompt: string, seed: number): string {
+  const params = new URLSearchParams({
+    model: POLLINATIONS_MODEL,
+    width: String(POLLINATIONS_WIDTH),
+    height: String(POLLINATIONS_HEIGHT),
+    seed: String(seed),
+    nologo: "true",
+    enhance: "false",
+    safe: "false",
+    referrer: "cutmatch",
+  });
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?${params.toString()}`;
+}
+
+async function fetchPollinationsImage(prompt: string, seed: number): Promise<Buffer | null> {
+  const url = buildPollinationsUrl(prompt, seed);
+
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
     try {
-      const buf = await Promise.race([
-        generateImageBuffer(prompt, "1024x1024"),
-        new Promise<Buffer>((_, reject) =>
-          setTimeout(() => reject(new Error("timed out")), HAIR_TRYON_TIMEOUT_MS)
-        ),
-      ]);
-      if (!buf || buf.length < 1000) {
-        console.warn(`OpenAI image attempt ${attempt}: buffer too small (${buf?.length ?? 0} bytes)`);
-        await new Promise((r) => setTimeout(r, 2000));
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "image/jpeg,image/png,image/*" },
+        signal: controller.signal,
+      });
+
+      if (res.status === 429) {
+        console.warn(`Pollinations attempt ${attempt}: rate limited, backing off`);
+        await new Promise((r) => setTimeout(r, attempt * 2000));
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.warn(`Pollinations attempt ${attempt}: HTTP ${res.status} — ${text.slice(0, 150)}`);
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.startsWith("image/")) {
+        const text = await res.text().catch(() => "");
+        console.warn(`Pollinations attempt ${attempt}: non-image content-type "${ct}" — ${text.slice(0, 150)}`);
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length < 1000) {
+        console.warn(`Pollinations attempt ${attempt}: buffer too small (${buf.length} bytes)`);
         continue;
       }
       return buf;
     } catch (err: any) {
-      console.warn(`OpenAI image attempt ${attempt} error: ${err.message}`);
-      await new Promise((r) => setTimeout(r, 2000));
+      const reason = err.name === "AbortError" ? "timed out" : err.message;
+      console.warn(`Pollinations attempt ${attempt} error: ${reason}`);
+      await new Promise((r) => setTimeout(r, 1500));
+    } finally {
+      clearTimeout(timer);
     }
   }
   return null;
@@ -343,15 +391,16 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
     }
 
     const prompt = buildPortraitPrompt(analysis, rec);
+    const seed = parseInt(crypto.createHash("md5").update(raw + rec.name).digest("hex").slice(0, 8), 16) % 2147483647;
 
-    const buf = await fetchOpenAIImage(prompt);
+    const buf = await fetchPollinationsImage(prompt, seed);
     if (!buf) {
-      console.warn(`Rank ${rec.rank}: OpenAI image generation failed for "${rec.name}"`);
+      console.warn(`Rank ${rec.rank}: Pollinations image generation failed for "${rec.name}"`);
       return null;
     }
 
-    const localUrl = saveImageBuffer(buf, "png");
-    console.log(`Rank ${rec.rank}: saved OpenAI portrait to ${localUrl}`);
+    const localUrl = saveImageBuffer(buf, "jpg");
+    console.log(`Rank ${rec.rank}: saved Pollinations portrait to ${localUrl}`);
     setHairTryOnCache(cacheKey, localUrl);
     return localUrl;
   } catch (err: any) {
