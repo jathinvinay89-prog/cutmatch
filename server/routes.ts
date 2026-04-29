@@ -330,14 +330,18 @@ function buildPollinationsUrl(prompt: string, seed: number): string {
 
 async function fetchPollinationsImage(prompt: string, seed: number): Promise<Buffer | null> {
   const url = buildPollinationsUrl(prompt, seed);
+  const token = process.env.GROQ_API_KEY;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
     try {
+      const headers: Record<string, string> = { Accept: "image/jpeg,image/png,image/*" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch(url, {
         method: "GET",
-        headers: { Accept: "image/jpeg,image/png,image/*" },
+        headers,
         signal: controller.signal,
       });
 
