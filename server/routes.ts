@@ -65,10 +65,10 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 function getServerBase(): string {
   const port = process.env.PORT || "5000";
   if (process.env.REPLIT_DOMAINS) {
-    return `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}:${port}`;
+    return `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}`;
   }
   if (process.env.REPLIT_DEV_DOMAIN) {
-    return `https://${process.env.REPLIT_DEV_DOMAIN}:${port}`;
+    return `https://${process.env.REPLIT_DEV_DOMAIN}`;
   }
   return `http://localhost:${port}`;
 }
@@ -347,14 +347,14 @@ async function fetchPollinationsImage(prompt: string, seed: number): Promise<Buf
 
       if (res.status === 429) {
         console.warn(`Pollinations attempt ${attempt}: rate limited, backing off`);
-        await new Promise((r) => setTimeout(r, attempt * 2000));
+        await new Promise((r) => setTimeout(r, attempt * 1000));
         continue;
       }
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         console.warn(`Pollinations attempt ${attempt}: HTTP ${res.status} — ${text.slice(0, 150)}`);
-        await new Promise((r) => setTimeout(r, 1500));
+        await new Promise((r) => setTimeout(r, 800));
         continue;
       }
 
@@ -524,23 +524,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${imageBase64}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = [];
-      for (const rec of analysis.recommendations) {
-        try {
-          const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
-          recsWithImages.push({
-            rank: rec.rank, name: rec.name, description: rec.description,
-            whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-            generatedImage: rewriteImageUrl(url, req),
-          });
-        } catch (e: any) {
-          console.warn(`analyze-simple rank ${rec.rank}: error — ${e.message}`);
-          recsWithImages.push({
-            rank: rec.rank, name: rec.name, description: rec.description,
-            whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: null,
-          });
-        }
-      }
+      const recsWithImages = await Promise.all(
+        analysis.recommendations.map(async (rec, i) => {
+          if (i > 0) await new Promise((r) => setTimeout(r, i * 300));
+          try {
+            const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
+            return {
+              rank: rec.rank, name: rec.name, description: rec.description,
+              whyItFits: rec.whyItFits, difficulty: rec.difficulty,
+              generatedImage: rewriteImageUrl(url, req),
+            };
+          } catch (e: any) {
+            console.warn(`analyze-simple rank ${rec.rank}: error — ${e.message}`);
+            return {
+              rank: rec.rank, name: rec.name, description: rec.description,
+              whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: null,
+            };
+          }
+        })
+      );
 
       res.json({
         faceShape: analysis.faceShape,
@@ -628,15 +630,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       send("status", { message: "Generating your hair try-on looks..." });
 
-      for (const rec of analysis.recommendations) {
-        try {
-          const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
-          send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(url, req) });
-        } catch (imgErr: any) {
-          console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
-          send("image", { rank: rec.rank, generatedImage: null });
-        }
-      }
+      await Promise.all(
+        analysis.recommendations.map(async (rec, i) => {
+          if (i > 0) await new Promise((r) => setTimeout(r, i * 300));
+          try {
+            const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
+            send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(url, req) });
+          } catch (imgErr: any) {
+            console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
+            send("image", { rank: rec.rank, generatedImage: null });
+          }
+        })
+      );
 
       send("done", {});
       res.end();
