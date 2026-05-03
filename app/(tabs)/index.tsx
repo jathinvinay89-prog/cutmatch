@@ -123,6 +123,8 @@ export default function CutMatchScreen() {
   const [hasSentToFriend, setHasSentToFriend] = useState(false);
   const [generatingImageRanks, setGeneratingImageRanks] = useState<Set<number>>(new Set());
   const [generatedImages, setGeneratedImages] = useState<Record<number, string>>({});
+  const [analysisPhase, setAnalysisPhase] = useState<"idle" | "analyzing" | "images">("idle");
+  const [pendingAnalysis, setPendingAnalysis] = useState<AnalysisState | null>(null);
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -190,6 +192,8 @@ export default function CutMatchScreen() {
   }, []);
 
   const showResults = () => {
+    if (generatingImageRanks.size > 0) return;
+    setAnalysisPhase("images");
     setPhase("results");
     Animated.spring(resultsAnim, {
       toValue: 0,
@@ -294,6 +298,8 @@ export default function CutMatchScreen() {
   const generateImages = useCallback(async (analysisData: AnalysisState) => {
     const ranks = new Set(analysisData.recommendations.map((r) => r.rank));
     setGeneratingImageRanks(ranks);
+    setAnalysisPhase("images");
+    setPendingAnalysis(analysisData);
 
     // Start injecting Puter script immediately in background (web only)
     if (Platform.OS === "web") injectPuterScript();
@@ -348,6 +354,8 @@ export default function CutMatchScreen() {
     setAnalysis(null);
     setGeneratedImages({});
     setGeneratingImageRanks(new Set());
+    setAnalysisPhase("analyzing");
+    setPendingAnalysis(null);
     animateDots();
 
     let base64Data: string;
@@ -412,10 +420,8 @@ export default function CutMatchScreen() {
               };
               if (!resultsShown) {
                 resultsShown = true;
-                setStatusText("Your CutMatch is ready!");
+                setStatusText("Generating your CutMatch...");
                 setAnalysis({ ...currentAnalysis });
-                triggerHaptic("success");
-                showResults();
               }
             } else if (event.type === "done") {
               if (currentAnalysis) {
@@ -432,8 +438,7 @@ export default function CutMatchScreen() {
 
       if (!resultsShown && currentAnalysis) {
         setAnalysis({ ...currentAnalysis });
-        triggerHaptic("success");
-        showResults();
+        setStatusText("Generating your CutMatch...");
       }
     } catch (err: any) {
       triggerHaptic("error");
