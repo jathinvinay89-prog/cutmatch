@@ -21,11 +21,15 @@ externalPort = 80
 localPort = 8082
 externalPort = 3000
 
+[[ports]]
+localPort = 19000
+externalPort = 3002
+
 [env]
 PORT = "5000"
 
 [agent]
-stack = "EXPO"
+stack = "BEST_EFFORT_FALLBACK"
 integrations = ["javascript_openai_ai_integrations:2.0.0"]
 expertMode = true
 
