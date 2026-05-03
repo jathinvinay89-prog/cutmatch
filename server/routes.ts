@@ -18,30 +18,6 @@ interface FeedCacheEntry {
 const feedCache = new Map<string, FeedCacheEntry>();
 const FEED_CACHE_TTL_MS = 10_000;
 
-// ── HAIR TRY-ON CACHE ─────────────────────────────────────────────────────────
-interface HairTryOnCacheEntry {
-  url: string;
-  expiresAt: number;
-}
-const hairTryOnCache = new Map<string, HairTryOnCacheEntry>();
-const HAIR_TRYON_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-function getHairTryOnCache(key: string): string | null {
-  const entry = hairTryOnCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { hairTryOnCache.delete(key); return null; }
-  const filePath = path.join(UPLOADS_DIR, path.basename(entry.url));
-  if (!fs.existsSync(filePath)) { hairTryOnCache.delete(key); return null; }
-  return entry.url;
-}
-
-function setHairTryOnCache(key: string, url: string): void {
-  hairTryOnCache.set(key, { url, expiresAt: Date.now() + HAIR_TRYON_CACHE_TTL_MS });
-}
-
-function hashHairTryOnKey(imageBase64: string, recName: string): string {
-  return crypto.createHash("sha256").update(imageBase64 + recName).digest("hex");
-}
 
 function getFeedCache(key: string): any | null {
   const entry = feedCache.get(key);
@@ -286,142 +262,7 @@ Return exactly 4 recommendations. Output ONLY the JSON object.`;
   throw lastError || new Error("Analysis failed after retries");
 }
 
-const HAIR_TRYON_TIMEOUT_MS = 45_000;
-
-function buildPortraitPrompt(analysis: FaceAnalysis, rec: HaircutRec): string {
-  const gender = analysis.gender || "person";
-  const age = analysis.ageRange ? `${analysis.ageRange} year old ` : "";
-  const skin = analysis.skinTone ? `${analysis.skinTone} skin tone, ` : "";
-  const hairColor = analysis.hairColor ? `${analysis.hairColor} hair, ` : "";
-  const face = analysis.faceShape ? `${analysis.faceShape} face shape, ` : "";
-  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
-  const features = analysis.faceFeatures ? `${analysis.faceFeatures}, ` : "";
-  const cut = `${rec.name} hairstyle — ${rec.imagePrompt}`;
-
-  return `Studio portrait photograph of a ${age}${gender} with ${face}${skin}${hairColor}${glasses}${features}${cut}. Front-facing, natural lighting, sharp focus on face and hair, photorealistic, professional headshot, neutral background, high detail`.slice(0, 1000);
-}
-
-function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
-  const filename = `${crypto.randomUUID()}.${ext}`;
-  fs.writeFileSync(path.join(UPLOADS_DIR, filename), buf);
-  return `/uploads/${filename}`;
-}
-
-// ── PUTER.AI IMAGE GENERATION ─────────────────────────────────────────────────
-// Uses puter.com's AI image generation API (free Puter account required).
-// Driver: openai-image-generation, Model: dall-e-2 (lowest cost, still good quality)
-// API docs: https://docs.puter.com
-const PUTER_API_ORIGIN = "https://api.puter.com";
-
-async function fetchPuterImage(prompt: string): Promise<Buffer | null> {
-  const token = process.env.PUTER_API_KEY;
-  if (!token) {
-    console.error("PUTER_API_KEY not set — image generation disabled");
-    return null;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
-
-  try {
-    const res = await fetch(`${PUTER_API_ORIGIN}/drivers/call`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        interface: "puter-image-generation",
-        driver: "openai-image-generation",
-        test_mode: false,
-        method: "generate",
-        args: { prompt, model: "dall-e-2", size: "512x512" },
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timer);
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.warn(`Puter image generation failed: HTTP ${res.status} — ${text.slice(0, 200)}`);
-      return null;
-    }
-
-    const ct = res.headers.get("content-type") || "";
-
-    // Direct binary image response
-    if (ct.startsWith("image/")) {
-      const buf = Buffer.from(await res.arrayBuffer());
-      return buf.length >= 1000 ? buf : null;
-    }
-
-    // JSON response — parse and handle URL or base64
-    const json: any = await res.json().catch(() => null);
-
-    const imageUrl: string | null =
-      typeof json?.result === "string" ? json.result :
-      typeof json?.result?.url === "string" ? json.result.url :
-      typeof json?.url === "string" ? json.url :
-      null;
-
-    if (imageUrl) {
-      const imgRes = await fetch(imageUrl);
-      if (imgRes.ok) {
-        const buf = Buffer.from(await imgRes.arrayBuffer());
-        return buf.length >= 1000 ? buf : null;
-      }
-    }
-
-    const b64: string | null =
-      typeof json?.result?.b64_json === "string" ? json.result.b64_json :
-      typeof json?.b64_json === "string" ? json.b64_json :
-      null;
-
-    if (b64) {
-      const buf = Buffer.from(b64, "base64");
-      return buf.length >= 1000 ? buf : null;
-    }
-
-    console.warn(`Puter image generation: unexpected response — ${JSON.stringify(json).slice(0, 200)}`);
-    return null;
-  } catch (err: any) {
-    const reason = err.name === "AbortError" ? "timed out" : err.message;
-    console.warn(`Puter image generation error: ${reason}`);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
-  try {
-    const raw = imageInput.startsWith("data:") ? imageInput.split(",")[1] : imageInput;
-
-    const cacheKey = hashHairTryOnKey(raw, rec.name);
-    const cached = getHairTryOnCache(cacheKey);
-    if (cached) {
-      console.log(`Rank ${rec.rank}: returning cached hair try-on for "${rec.name}"`);
-      return cached;
-    }
-
-    const prompt = buildPortraitPrompt(analysis, rec);
-
-    const buf = await fetchPuterImage(prompt);
-    if (!buf) {
-      console.warn(`Rank ${rec.rank}: Puter image generation failed for "${rec.name}"`);
-      return null;
-    }
-
-    const localUrl = saveImageBuffer(buf, "jpg");
-    console.log(`Rank ${rec.rank}: saved Puter portrait to ${localUrl}`);
-    setHairTryOnCache(cacheKey, localUrl);
-    return localUrl;
-  } catch (err: any) {
-    console.warn(`Rank ${rec.rank}: hair try-on failed — ${err.message}`);
-    return null;
-  }
-}
+// Image generation is handled client-side via Puter.js (puter.ai.txt2img)
 
 // ── COMPETITION EXPIRY ───────────────────────────────────────────────────────
 async function checkExpiredCompetitions() {
@@ -534,31 +375,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${imageBase64}`;
       const analysis = await analyzeFace(imageUrl);
 
-      const recsWithImages = await Promise.all(
-        analysis.recommendations.map(async (rec, i) => {
-          if (i > 0) await new Promise((r) => setTimeout(r, i * 300));
-          try {
-            const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
-            return {
-              rank: rec.rank, name: rec.name, description: rec.description,
-              whyItFits: rec.whyItFits, difficulty: rec.difficulty,
-              generatedImage: rewriteImageUrl(url, req),
-            };
-          } catch (e: any) {
-            console.warn(`analyze-simple rank ${rec.rank}: error — ${e.message}`);
-            return {
-              rank: rec.rank, name: rec.name, description: rec.description,
-              whyItFits: rec.whyItFits, difficulty: rec.difficulty, generatedImage: null,
-            };
-          }
-        })
-      );
-
       res.json({
         faceShape: analysis.faceShape,
         faceFeatures: analysis.faceFeatures,
         hasGlasses: analysis.hasGlasses,
-        recommendations: recsWithImages,
+        gender: analysis.gender,
+        skinTone: analysis.skinTone,
+        hairColor: analysis.hairColor,
+        ageRange: analysis.ageRange,
+        recommendations: analysis.recommendations.map((r) => ({
+          rank: r.rank, name: r.name, description: r.description,
+          whyItFits: r.whyItFits, difficulty: r.difficulty,
+          imagePrompt: r.imagePrompt,
+          generatedImage: null,
+        })),
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Analysis failed" });
@@ -605,6 +435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ── STREAMING ANALYZE (SSE) ───────────────────────────────────────────────
+  // Backend only does face analysis. Image generation happens client-side via Puter.js.
   app.post("/api/analyze-stream", async (req: Request, res: Response) => {
     const { image } = req.body;
     if (!image) return res.status(400).json({ error: "Image required" });
@@ -632,26 +463,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         hasGlasses: analysis.hasGlasses,
         gender: analysis.gender,
         skinTone: analysis.skinTone,
+        hairColor: analysis.hairColor,
+        ageRange: analysis.ageRange,
         recommendations: analysis.recommendations.map((r) => ({
           rank: r.rank, name: r.name, description: r.description,
-          whyItFits: r.whyItFits, difficulty: r.difficulty, generatedImage: null,
+          whyItFits: r.whyItFits, difficulty: r.difficulty,
+          imagePrompt: r.imagePrompt,
+          generatedImage: null,
         })),
       });
-
-      send("status", { message: "Generating your hair try-on looks..." });
-
-      await Promise.all(
-        analysis.recommendations.map(async (rec, i) => {
-          if (i > 0) await new Promise((r) => setTimeout(r, i * 300));
-          try {
-            const url = await generateHairTryOnUrl(imageUrl, analysis, rec);
-            send("image", { rank: rec.rank, generatedImage: rewriteImageUrl(url, req) });
-          } catch (imgErr: any) {
-            console.warn(`Rank ${rec.rank}: unexpected error, sending null — ${imgErr.message}`);
-            send("image", { rank: rec.rank, generatedImage: null });
-          }
-        })
-      );
 
       send("done", {});
       res.end();

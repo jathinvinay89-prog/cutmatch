@@ -36,6 +36,7 @@ interface Recommendation {
   description: string;
   whyItFits: string;
   difficulty: string;
+  imagePrompt: string;
   generatedImage: string | null;
 }
 
@@ -43,7 +44,23 @@ interface AnalysisState {
   faceShape: string;
   faceFeatures: string;
   hasGlasses: boolean;
+  gender: string;
+  skinTone: string;
+  hairColor: string;
+  ageRange: string;
   recommendations: Recommendation[];
+}
+
+function buildPortraitPrompt(analysis: AnalysisState, rec: Recommendation): string {
+  const gender = analysis.gender || "person";
+  const age = analysis.ageRange ? `${analysis.ageRange} year old ` : "";
+  const skin = analysis.skinTone ? `${analysis.skinTone} skin tone, ` : "";
+  const hair = analysis.hairColor ? `${analysis.hairColor} hair, ` : "";
+  const face = analysis.faceShape ? `${analysis.faceShape} face shape, ` : "";
+  const glasses = analysis.hasGlasses ? "wearing glasses, " : "";
+  const features = analysis.faceFeatures ? `${analysis.faceFeatures}, ` : "";
+  const cut = rec.imagePrompt ? `${rec.name} hairstyle — ${rec.imagePrompt}` : `${rec.name} hairstyle`;
+  return `Studio portrait photograph of a ${age}${gender} with ${face}${skin}${hair}${glasses}${features}${cut}. Front-facing, natural lighting, sharp focus on face and hair, photorealistic, professional headshot, neutral background, high detail`.slice(0, 1000);
 }
 
 type Phase = "camera" | "loading" | "results";
@@ -195,6 +212,39 @@ export default function CutMatchScreen() {
     }
   };
 
+  const generateImagesWithPuter = async (analysisData: AnalysisState) => {
+    if (Platform.OS !== "web") return;
+    const puterAI = (window as any).puter?.ai;
+    if (!puterAI?.txt2img) {
+      console.warn("Puter.js not loaded or puter.ai.txt2img unavailable");
+      return;
+    }
+    await Promise.all(
+      analysisData.recommendations.map(async (rec, i) => {
+        if (i > 0) await new Promise((r) => setTimeout(r, i * 250));
+        try {
+          const prompt = buildPortraitPrompt(analysisData, rec);
+          const img = await puterAI.txt2img(prompt);
+          const imageUri: string | null =
+            typeof img?.src === "string" ? img.src :
+            typeof img === "string" ? img : null;
+          if (imageUri) {
+            setAnalysis((prev) =>
+              prev ? {
+                ...prev,
+                recommendations: prev.recommendations.map((r) =>
+                  r.rank === rec.rank ? { ...r, generatedImage: imageUri } : r
+                ),
+              } : prev
+            );
+          }
+        } catch {
+          // Silent — card shows scissors placeholder
+        }
+      })
+    );
+  };
+
   const runAnalysis = async () => {
     if (!selectedImage) return;
     triggerHaptic("medium");
@@ -237,8 +287,6 @@ export default function CutMatchScreen() {
       const decoder = new TextDecoder();
       let buffer = "";
       let currentAnalysis: AnalysisState | null = null;
-      let imagesReceived = 0;
-      let totalImages = 0;
       let resultsShown = false;
 
       while (true) {
@@ -259,30 +307,22 @@ export default function CutMatchScreen() {
                 faceShape: event.faceShape,
                 faceFeatures: event.faceFeatures,
                 hasGlasses: event.hasGlasses,
+                gender: event.gender || "",
+                skinTone: event.skinTone || "",
+                hairColor: event.hairColor || "",
+                ageRange: event.ageRange || "",
                 recommendations: event.recommendations,
               };
-              totalImages = event.recommendations.length;
-              setStatusText(`Generating your looks... 0 of ${totalImages}`);
-            } else if (event.type === "image") {
+              if (!resultsShown) {
+                resultsShown = true;
+                setStatusText("Your CutMatch is ready!");
+                setAnalysis({ ...currentAnalysis });
+                triggerHaptic("success");
+                showResults();
+              }
+            } else if (event.type === "done") {
               if (currentAnalysis) {
-                currentAnalysis = {
-                  ...currentAnalysis,
-                  recommendations: currentAnalysis.recommendations.map((r) =>
-                    r.rank === event.rank
-                      ? { ...r, generatedImage: event.generatedImage }
-                      : r
-                  ),
-                };
-                imagesReceived++;
-                if (imagesReceived < totalImages) {
-                  setStatusText(`Generating your looks... ${imagesReceived} of ${totalImages}`);
-                } else if (!resultsShown) {
-                  resultsShown = true;
-                  setStatusText("Your CutMatch is ready!");
-                  setAnalysis({ ...currentAnalysis });
-                  triggerHaptic("success");
-                  showResults();
-                }
+                generateImagesWithPuter({ ...currentAnalysis });
               }
             } else if (event.type === "error") {
               throw new Error(event.message);
@@ -318,6 +358,41 @@ export default function CutMatchScreen() {
     });
   };
 
+  const uploadBlobImage = async (blobUrl: string): Promise<string> => {
+    if (!blobUrl.startsWith("blob:")) return blobUrl;
+    try {
+      const blobRes = await fetch(blobUrl);
+      const blob = await blobRes.blob();
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      const uploadRes = await fetch(new URL("/api/upload", apiBase).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: b64 }),
+      });
+      if (uploadRes.ok) {
+        const { url } = await uploadRes.json();
+        return url;
+      }
+    } catch {}
+    return blobUrl;
+  };
+
+  const persistRecommendationImages = async (recs: Recommendation[]): Promise<Recommendation[]> => {
+    if (Platform.OS !== "web") return recs;
+    return Promise.all(
+      recs.map(async (rec) => {
+        if (!rec.generatedImage || !rec.generatedImage.startsWith("blob:")) return rec;
+        const url = await uploadBlobImage(rec.generatedImage);
+        return { ...rec, generatedImage: url };
+      })
+    );
+  };
+
   const sharePost = async () => {
     if (!currentUser || !analysis || !selectedImage) return;
     setIsSharing(true);
@@ -325,6 +400,8 @@ export default function CutMatchScreen() {
       const facePhotoUrl = selectedBase64
         ? `data:image/jpeg;base64,${selectedBase64}`
         : selectedImage;
+
+      const persistedRecs = await persistRecommendationImages(analysis.recommendations);
 
       const url = new URL("/api/posts", apiBase).toString();
       await fetch(url, {
@@ -336,7 +413,7 @@ export default function CutMatchScreen() {
           faceShape: analysis.faceShape,
           faceFeatures: analysis.faceFeatures,
           hasGlasses: analysis.hasGlasses,
-          recommendations: analysis.recommendations,
+          recommendations: persistedRecs,
           caption,
           isPublic: settings.publicPosts,
         }),
@@ -360,6 +437,8 @@ export default function CutMatchScreen() {
         ? `data:image/jpeg;base64,${selectedBase64}`
         : selectedImage ?? "";
 
+      const persistedRecs = await persistRecommendationImages(analysis.recommendations);
+
       const postUrl = new URL("/api/posts", apiBase).toString();
       const postRes = await fetch(postUrl, {
         method: "POST",
@@ -370,7 +449,7 @@ export default function CutMatchScreen() {
           faceShape: analysis.faceShape,
           faceFeatures: analysis.faceFeatures,
           hasGlasses: analysis.hasGlasses,
-          recommendations: analysis.recommendations,
+          recommendations: persistedRecs,
           caption: "",
           isPublic: false,
         }),
