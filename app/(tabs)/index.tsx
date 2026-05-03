@@ -246,19 +246,71 @@ export default function CutMatchScreen() {
     }
   };
 
-  const generateImagesWithPuter = async (analysisData: AnalysisState) => {
-    if (Platform.OS !== "web") return;
+  const setImageForRank = (rank: number, imageUri: string) => {
+    setAnalysis((prev) =>
+      prev ? {
+        ...prev,
+        recommendations: prev.recommendations.map((r) =>
+          r.rank === rank ? { ...r, generatedImage: imageUri } : r
+        ),
+      } : prev
+    );
+  };
 
+  const generateImagesWithPuter = async (analysisData: AnalysisState) => {
     // Mark all ranks as generating
     const ranks = new Set(analysisData.recommendations.map((r) => r.rank));
     setGeneratingImageRanks(ranks);
 
-    // Ensure the script is injected, then wait up to 15s for puter.ai to be ready
+    if (Platform.OS !== "web") {
+      // Native: use Pollinations.ai — free, no API key, just a URL
+      await Promise.all(
+        analysisData.recommendations.map(async (rec, i) => {
+          if (i > 0) await new Promise((r) => setTimeout(r, i * 400));
+          try {
+            const prompt = buildPortraitPrompt(analysisData, rec);
+            const seed = Math.floor(Math.random() * 999999);
+            const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&seed=${seed}&nologo=true&model=flux`;
+            setImageForRank(rec.rank, url);
+          } catch (err) {
+            console.warn(`Pollinations image gen failed for rank ${rec.rank}:`, err);
+          } finally {
+            setGeneratingImageRanks((prev) => {
+              const next = new Set(prev);
+              next.delete(rec.rank);
+              return next;
+            });
+          }
+        })
+      );
+      return;
+    }
+
+    // Web: use Puter.js — user-pays model via Puter.com account
     injectPuterScript();
     const puterAI = await waitForPuter(15_000);
     if (!puterAI?.txt2img) {
-      console.warn("Puter.js did not become available — skipping image generation");
-      setGeneratingImageRanks(new Set());
+      console.warn("Puter.js unavailable — falling back to Pollinations");
+      // Fallback: Pollinations on web too
+      await Promise.all(
+        analysisData.recommendations.map(async (rec, i) => {
+          if (i > 0) await new Promise((r) => setTimeout(r, i * 400));
+          try {
+            const prompt = buildPortraitPrompt(analysisData, rec);
+            const seed = Math.floor(Math.random() * 999999);
+            const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&seed=${seed}&nologo=true&model=flux`;
+            setImageForRank(rec.rank, url);
+          } catch (err) {
+            console.warn(`Pollinations fallback failed for rank ${rec.rank}:`, err);
+          } finally {
+            setGeneratingImageRanks((prev) => {
+              const next = new Set(prev);
+              next.delete(rec.rank);
+              return next;
+            });
+          }
+        })
+      );
       return;
     }
 
@@ -267,20 +319,27 @@ export default function CutMatchScreen() {
         if (i > 0) await new Promise((r) => setTimeout(r, i * 250));
         try {
           const prompt = buildPortraitPrompt(analysisData, rec);
-          const img = await puterAI.txt2img(prompt);
-          const imageUri: string | null =
-            typeof img?.src === "string" ? img.src :
-            typeof img === "string" ? img : null;
-          if (imageUri) {
-            setAnalysis((prev) =>
-              prev ? {
-                ...prev,
-                recommendations: prev.recommendations.map((r) =>
-                  r.rank === rec.rank ? { ...r, generatedImage: imageUri } : r
-                ),
-              } : prev
-            );
+          const imgEl = await puterAI.txt2img(prompt);
+          // imgEl is an HTMLImageElement; convert blob: src → data URL for cross-origin safety
+          let imageUri: string | null = null;
+          const rawSrc: string = imgEl?.src ?? (typeof imgEl === "string" ? imgEl : "");
+          if (rawSrc.startsWith("blob:")) {
+            try {
+              const resp = await globalThis.fetch(rawSrc);
+              const blob = await resp.blob();
+              imageUri = await new Promise<string>((res, rej) => {
+                const reader = new FileReader();
+                reader.onload = () => res(reader.result as string);
+                reader.onerror = rej;
+                reader.readAsDataURL(blob);
+              });
+            } catch {
+              imageUri = rawSrc;
+            }
+          } else if (rawSrc) {
+            imageUri = rawSrc;
           }
+          if (imageUri) setImageForRank(rec.rank, imageUri);
         } catch (err) {
           console.warn(`Puter image gen failed for rank ${rec.rank}:`, err);
         } finally {
