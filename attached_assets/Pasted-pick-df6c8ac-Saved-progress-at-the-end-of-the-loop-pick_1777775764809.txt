@@ -1,0 +1,50 @@
+pick df6c8ac # Saved progress at the end of the loop
+pick a384f03 # Update image generation to use OpenAI and fix app errors
+pick 6793f00 # Implement image generation using Pollinations.ai for free and fast results
+pick c7b4b29 # Saved progress at the end of the loop
+pick 815897a # Saved progress at the end of the loop
+pick e56a54c # Add authentication to image generation service using secret API key
+pick bf8dbc3 # Fix image display issues and improve processing speed
+pick 67337ae # Replace image generation service with Puter.ai
+pick 2c4fd8e # Add AI-powered image generation to the app using Puter.js
+pick ed96711 # Add a visual indicator and loading state for image generation
+pick 7de1eba # Add image generation for native platforms and improve web fallback
+pick 2bcd399 # Improve image generation and display across devices
+pick ca0b7e5 # Show generated images immediately after they are all finished
+pick a4e195a # Wait for all images to generate before showing results
+pick 584431e # Add fallback for slow image generation requests to a different service
+pick c09b577 # Add an untracked image asset to the project
+pick 9e40bad # Add an image file to the project assets
+pick b9b821c # Add image attachment to the project assets
+pick 767c604 # Remove sensitive information from project history
+
+# Rebase 2e0f698..767c604 onto 2e0f698 (19 commands)
+#
+# Commands:
+# p, pick <commit> = use commit
+# r, reword <commit> = use commit, but edit the commit message
+# e, edit <commit> = use commit, but stop for amending
+# s, squash <commit> = use commit, but meld into previous commit
+# f, fixup [-C | -c] <commit> = like "squash" but keep only the previous
+#                    commit's log message, unless -C is used, in which case
+#                    keep only this commit's message; -c is same as -C but
+#                    opens the editor
+# x, exec <command> = run command (the rest of the line) using shell
+# b, break = stop here (continue rebase later with 'git rebase --continue')
+# d, drop <commit> = remove commit
+# l, label <label> = label current HEAD with a name
+# t, reset <label> = reset HEAD to a label
+# m, merge [-C <commit> | -c <commit>] <label> [# <oneline>]
+#         create a merge commit using the original merge commit's
+#         message (or the oneline, if no original merge commit was
+#         specified); use -c <commit> to reword the commit message
+# u, update-ref <ref> = track a placeholder for the <ref> to be updated
+#                       to this position in the new commits. The <ref> is
+#                       updated at the end of the rebase
+#
+# These lines can be re-ordered; they are executed from top to bottom.
+#
+# If you remove a line here THAT COMMIT WILL BE LOST.
+#
+# However, if you remove everything, the rebase will be aborted.
+#
