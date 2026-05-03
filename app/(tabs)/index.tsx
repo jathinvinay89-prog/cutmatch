@@ -123,10 +123,6 @@ export default function CutMatchScreen() {
   const [hasSentToFriend, setHasSentToFriend] = useState(false);
   const [generatingImageRanks, setGeneratingImageRanks] = useState<Set<number>>(new Set());
   const [generatedImages, setGeneratedImages] = useState<Record<number, string>>({});
-  const [analysisPhase, setAnalysisPhase] = useState<"idle" | "analyzing" | "images">("idle");
-  const [pendingAnalysis, setPendingAnalysis] = useState<AnalysisState | null>(null);
-  const [analysisReady, setAnalysisReady] = useState(false);
-  const [imageCount, setImageCount] = useState(0);
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -181,21 +177,7 @@ export default function CutMatchScreen() {
     return () => stopGlowPulse();
   }, [selectedImage, phase]);
 
-  React.useEffect(() => {
-    if (pendingAnalysis && imageCount >= 4 && generatingImageRanks.size === 0 && !analysisReady) {
-      triggerHaptic("success");
-      setStatusText("Your CutMatch is ready!");
-      setAnalysisReady(true);
-      setPendingAnalysis(null);
-      setPhase("results");
-      Animated.spring(resultsAnim, {
-        toValue: 0,
-        tension: 60,
-        friction: 14,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [pendingAnalysis, imageCount, generatingImageRanks, analysisReady]);
+  // No longer needed — results are shown immediately after analysis, images load in background
 
   const animateDots = useCallback(() => {
     loadingDotAnim.forEach((dot, i) => {
@@ -210,8 +192,6 @@ export default function CutMatchScreen() {
   }, []);
 
   const showResults = () => {
-    setAnalysisPhase("images");
-    setAnalysisReady(true);
     setPhase("results");
     Animated.spring(resultsAnim, {
       toValue: 0,
@@ -319,56 +299,49 @@ export default function CutMatchScreen() {
   const generateImages = useCallback(async (analysisData: AnalysisState) => {
     const ranks = new Set(analysisData.recommendations.map((r) => r.rank));
     setGeneratingImageRanks(ranks);
-    setAnalysisPhase("images");
-    setPendingAnalysis(analysisData);
-    setAnalysisReady(false);
-    setImageCount(0);
 
     // Start injecting Puter script immediately in background (web only)
     if (Platform.OS === "web") injectPuterScript();
 
-    await Promise.all(
-      analysisData.recommendations.map(async (rec, i) => {
-        // Stagger requests to avoid hammering Pollinations
-        if (i > 0) await new Promise((r) => setTimeout(r, i * 600));
-        const prompt = buildPortraitPrompt(analysisData, rec);
-        try {
-          // --- Primary: Pollinations ---
-          const polUri = await fetchPollinationsImage(prompt, 7000);
-          if (polUri) {
-            setRankImage(rec.rank, polUri);
-            setImageCount((n) => n + 1);
-            return;
-          }
+    // Generate all images in parallel — each card shows a spinner while loading
+    analysisData.recommendations.forEach(async (rec, i) => {
+      // Stagger requests slightly to avoid hammering Pollinations
+      if (i > 0) await new Promise((r) => setTimeout(r, i * 400));
+      const prompt = buildPortraitPrompt(analysisData, rec);
+      try {
+        // --- Primary: Pollinations (longer timeout for reliability) ---
+        const polUri = await fetchPollinationsImage(prompt, 20_000);
+        if (polUri) {
+          setRankImage(rec.rank, polUri);
+          return;
+        }
 
-          // --- Fallback: Puter.js (web only) ---
-          if (Platform.OS === "web") {
-            const puterAI = await waitForPuter(12_000);
-            if (puterAI?.txt2img) {
-              const imgEl = await puterAI.txt2img(prompt);
-              const rawSrc: string = imgEl?.src ?? (typeof imgEl === "string" ? imgEl : "");
-              if (rawSrc) {
-                let finalUri = rawSrc;
-                if (rawSrc.startsWith("blob:")) {
-                  try {
-                    const r2 = await globalThis.fetch(rawSrc);
-                    const b2 = await r2.blob();
-                    finalUri = URL.createObjectURL(b2);
-                  } catch { /* keep rawSrc */ }
-                }
-                setRankImage(rec.rank, finalUri);
-                setImageCount((n) => n + 1);
-                return;
+        // --- Fallback: Puter.js (web only) ---
+        if (Platform.OS === "web") {
+          const puterAI = await waitForPuter(12_000);
+          if (puterAI?.txt2img) {
+            const imgEl = await puterAI.txt2img(prompt);
+            const rawSrc: string = imgEl?.src ?? (typeof imgEl === "string" ? imgEl : "");
+            if (rawSrc) {
+              let finalUri = rawSrc;
+              if (rawSrc.startsWith("blob:")) {
+                try {
+                  const r2 = await globalThis.fetch(rawSrc);
+                  const b2 = await r2.blob();
+                  finalUri = URL.createObjectURL(b2);
+                } catch { /* keep rawSrc */ }
               }
+              setRankImage(rec.rank, finalUri);
+              return;
             }
           }
-        } catch (err) {
-          console.warn(`Image gen failed for rank ${rec.rank}:`, err);
-        } finally {
-          clearRankGenerating(rec.rank);
         }
-      })
-    );
+      } catch (err) {
+        console.warn(`Image gen failed for rank ${rec.rank}:`, err);
+      } finally {
+        clearRankGenerating(rec.rank);
+      }
+    });
   }, [fetchPollinationsImage, setRankImage, clearRankGenerating]);
 
   const runAnalysis = async () => {
@@ -379,9 +352,6 @@ export default function CutMatchScreen() {
     setAnalysis(null);
     setGeneratedImages({});
     setGeneratingImageRanks(new Set());
-    setAnalysisPhase("analyzing");
-    setPendingAnalysis(null);
-    setAnalysisReady(false);
     animateDots();
 
     let base64Data: string;
@@ -451,6 +421,15 @@ export default function CutMatchScreen() {
               }
             } else if (event.type === "done") {
               if (currentAnalysis) {
+                // Show results immediately — images stream in via spinners on each card
+                triggerHaptic("success");
+                setPhase("results");
+                Animated.spring(resultsAnim, {
+                  toValue: 0,
+                  tension: 60,
+                  friction: 14,
+                  useNativeDriver: true,
+                }).start();
                 generateImages({ ...currentAnalysis });
               }
             } else if (event.type === "error") {
@@ -463,8 +442,17 @@ export default function CutMatchScreen() {
       }
 
       if (!resultsShown && currentAnalysis) {
+        // Stream ended without a "done" event — show results anyway
         setAnalysis({ ...currentAnalysis });
-        setStatusText("Generating your CutMatch...");
+        triggerHaptic("success");
+        setPhase("results");
+        Animated.spring(resultsAnim, {
+          toValue: 0,
+          tension: 60,
+          friction: 14,
+          useNativeDriver: true,
+        }).start();
+        generateImages({ ...currentAnalysis });
       }
     } catch (err: any) {
       triggerHaptic("error");
