@@ -122,6 +122,7 @@ export default function CutMatchScreen() {
   const [isSendingToFriend, setIsSendingToFriend] = useState(false);
   const [hasSentToFriend, setHasSentToFriend] = useState(false);
   const [generatingImageRanks, setGeneratingImageRanks] = useState<Set<number>>(new Set());
+  const [generatedImages, setGeneratedImages] = useState<Record<number, string>>({});
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -246,112 +247,98 @@ export default function CutMatchScreen() {
     }
   };
 
-  const setImageForRank = (rank: number, imageUri: string) => {
-    setAnalysis((prev) =>
-      prev ? {
-        ...prev,
-        recommendations: prev.recommendations.map((r) =>
-          r.rank === rank ? { ...r, generatedImage: imageUri } : r
-        ),
-      } : prev
-    );
-  };
+  const setRankImage = useCallback((rank: number, uri: string) => {
+    setGeneratedImages((prev) => ({ ...prev, [rank]: uri }));
+  }, []);
 
-  const generateImagesWithPuter = async (analysisData: AnalysisState) => {
-    // Mark all ranks as generating
+  const clearRankGenerating = useCallback((rank: number) => {
+    setGeneratingImageRanks((prev) => {
+      const next = new Set(prev);
+      next.delete(rank);
+      return next;
+    });
+  }, []);
+
+  // Build a Pollinations URL and verify it's reachable.
+  // On native: returns the URL string directly — expo-image loads it natively.
+  // On web: fetches and returns a blob URL to avoid CORS issues.
+  // Returns null on 429/503/network error so caller can fall back to Puter.
+  const fetchPollinationsImage = useCallback(async (prompt: string): Promise<string | null> => {
+    const seed = Math.floor(Math.random() * 999999);
+    const encoded = encodeURIComponent(prompt.slice(0, 800));
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&seed=${seed}&nologo=true&model=flux`;
+
+    if (Platform.OS !== "web") {
+      // Native: expo-image handles HTTP URLs directly — just verify status first
+      try {
+        const resp = await globalThis.fetch(url);
+        if (!resp.ok) return null; // 429, 503 → caller falls back
+        // Don't read body here; expo-image will load from the URL
+        return url;
+      } catch {
+        return null;
+      }
+    }
+
+    // Web: fetch blob → create object URL so expo-image renders without CORS issues
+    try {
+      const resp = await globalThis.fetch(url);
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const generateImages = useCallback(async (analysisData: AnalysisState) => {
     const ranks = new Set(analysisData.recommendations.map((r) => r.rank));
     setGeneratingImageRanks(ranks);
 
-    if (Platform.OS !== "web") {
-      // Native: use Pollinations.ai — free, no API key, just a URL
-      await Promise.all(
-        analysisData.recommendations.map(async (rec, i) => {
-          if (i > 0) await new Promise((r) => setTimeout(r, i * 400));
-          try {
-            const prompt = buildPortraitPrompt(analysisData, rec);
-            const seed = Math.floor(Math.random() * 999999);
-            const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&seed=${seed}&nologo=true&model=flux`;
-            setImageForRank(rec.rank, url);
-          } catch (err) {
-            console.warn(`Pollinations image gen failed for rank ${rec.rank}:`, err);
-          } finally {
-            setGeneratingImageRanks((prev) => {
-              const next = new Set(prev);
-              next.delete(rec.rank);
-              return next;
-            });
-          }
-        })
-      );
-      return;
-    }
-
-    // Web: use Puter.js — user-pays model via Puter.com account
-    injectPuterScript();
-    const puterAI = await waitForPuter(15_000);
-    if (!puterAI?.txt2img) {
-      console.warn("Puter.js unavailable — falling back to Pollinations");
-      // Fallback: Pollinations on web too
-      await Promise.all(
-        analysisData.recommendations.map(async (rec, i) => {
-          if (i > 0) await new Promise((r) => setTimeout(r, i * 400));
-          try {
-            const prompt = buildPortraitPrompt(analysisData, rec);
-            const seed = Math.floor(Math.random() * 999999);
-            const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&seed=${seed}&nologo=true&model=flux`;
-            setImageForRank(rec.rank, url);
-          } catch (err) {
-            console.warn(`Pollinations fallback failed for rank ${rec.rank}:`, err);
-          } finally {
-            setGeneratingImageRanks((prev) => {
-              const next = new Set(prev);
-              next.delete(rec.rank);
-              return next;
-            });
-          }
-        })
-      );
-      return;
-    }
+    // Start injecting Puter script immediately in background (web only)
+    if (Platform.OS === "web") injectPuterScript();
 
     await Promise.all(
       analysisData.recommendations.map(async (rec, i) => {
-        if (i > 0) await new Promise((r) => setTimeout(r, i * 250));
+        // Stagger requests to avoid hammering Pollinations
+        if (i > 0) await new Promise((r) => setTimeout(r, i * 600));
+        const prompt = buildPortraitPrompt(analysisData, rec);
         try {
-          const prompt = buildPortraitPrompt(analysisData, rec);
-          const imgEl = await puterAI.txt2img(prompt);
-          // imgEl is an HTMLImageElement; convert blob: src → data URL for cross-origin safety
-          let imageUri: string | null = null;
-          const rawSrc: string = imgEl?.src ?? (typeof imgEl === "string" ? imgEl : "");
-          if (rawSrc.startsWith("blob:")) {
-            try {
-              const resp = await globalThis.fetch(rawSrc);
-              const blob = await resp.blob();
-              imageUri = await new Promise<string>((res, rej) => {
-                const reader = new FileReader();
-                reader.onload = () => res(reader.result as string);
-                reader.onerror = rej;
-                reader.readAsDataURL(blob);
-              });
-            } catch {
-              imageUri = rawSrc;
-            }
-          } else if (rawSrc) {
-            imageUri = rawSrc;
+          // --- Primary: Pollinations ---
+          const polUri = await fetchPollinationsImage(prompt);
+          if (polUri) {
+            setRankImage(rec.rank, polUri);
+            return;
           }
-          if (imageUri) setImageForRank(rec.rank, imageUri);
+
+          // --- Fallback: Puter.js (web only) ---
+          if (Platform.OS === "web") {
+            const puterAI = await waitForPuter(12_000);
+            if (puterAI?.txt2img) {
+              const imgEl = await puterAI.txt2img(prompt);
+              const rawSrc: string = imgEl?.src ?? (typeof imgEl === "string" ? imgEl : "");
+              if (rawSrc) {
+                let finalUri = rawSrc;
+                if (rawSrc.startsWith("blob:")) {
+                  try {
+                    const r2 = await globalThis.fetch(rawSrc);
+                    const b2 = await r2.blob();
+                    finalUri = URL.createObjectURL(b2);
+                  } catch { /* keep rawSrc */ }
+                }
+                setRankImage(rec.rank, finalUri);
+                return;
+              }
+            }
+          }
         } catch (err) {
-          console.warn(`Puter image gen failed for rank ${rec.rank}:`, err);
+          console.warn(`Image gen failed for rank ${rec.rank}:`, err);
         } finally {
-          setGeneratingImageRanks((prev) => {
-            const next = new Set(prev);
-            next.delete(rec.rank);
-            return next;
-          });
+          clearRankGenerating(rec.rank);
         }
       })
     );
-  };
+  }, [fetchPollinationsImage, setRankImage, clearRankGenerating]);
 
   const runAnalysis = async () => {
     if (!selectedImage) return;
@@ -359,6 +346,8 @@ export default function CutMatchScreen() {
     setPhase("loading");
     setStatusText("Analyzing your face...");
     setAnalysis(null);
+    setGeneratedImages({});
+    setGeneratingImageRanks(new Set());
     animateDots();
 
     let base64Data: string;
@@ -430,7 +419,7 @@ export default function CutMatchScreen() {
               }
             } else if (event.type === "done") {
               if (currentAnalysis) {
-                generateImagesWithPuter({ ...currentAnalysis });
+                generateImages({ ...currentAnalysis });
               }
             } else if (event.type === "error") {
               throw new Error(event.message);
@@ -490,10 +479,15 @@ export default function CutMatchScreen() {
     return blobUrl;
   };
 
+  // Merge generatedImages state into recs, then persist any blob: URLs to server
   const persistRecommendationImages = async (recs: Recommendation[]): Promise<Recommendation[]> => {
-    if (Platform.OS !== "web") return recs;
+    const merged = recs.map((rec) => ({
+      ...rec,
+      generatedImage: generatedImages[rec.rank] ?? rec.generatedImage ?? null,
+    }));
+    if (Platform.OS !== "web") return merged;
     return Promise.all(
-      recs.map(async (rec) => {
+      merged.map(async (rec) => {
         if (!rec.generatedImage || !rec.generatedImage.startsWith("blob:")) return rec;
         const url = await uploadBlobImage(rec.generatedImage);
         return { ...rec, generatedImage: url };
@@ -777,7 +771,15 @@ export default function CutMatchScreen() {
           )}
 
           {(analysis?.recommendations ?? [{}, {}, {}, {}]).map((rec: any, i: number) => (
-            <ResultCard key={i} rec={rec} index={i} colors={C} showDifficulty={settings.showDifficulty} isGenerating={generatingImageRanks.has(rec.rank)} />
+            <ResultCard
+              key={i}
+              rec={rec}
+              index={i}
+              colors={C}
+              showDifficulty={settings.showDifficulty}
+              isGenerating={generatingImageRanks.has(rec.rank)}
+              generatedImage={generatedImages[rec.rank] ?? null}
+            />
           ))}
         </Animated.ScrollView>
 
@@ -876,7 +878,7 @@ export default function CutMatchScreen() {
   );
 }
 
-function ResultCard({ rec, index, colors: C, showDifficulty, isGenerating }: { rec: any; index: number; colors: any; showDifficulty: boolean; isGenerating?: boolean }) {
+function ResultCard({ rec, index, colors: C, showDifficulty, isGenerating, generatedImage }: { rec: any; index: number; colors: any; showDifficulty: boolean; isGenerating?: boolean; generatedImage?: string | null }) {
   const slideAnim = useRef(new Animated.Value(50)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const isDark = C.background === "#0A0A0A";
@@ -921,8 +923,8 @@ function ResultCard({ rec, index, colors: C, showDifficulty, isGenerating }: { r
       )}
       <View style={styles.cardRow}>
         <View style={styles.cardImgBox}>
-          {rec.generatedImage ? (
-            <Image source={{ uri: rec.generatedImage }} style={styles.cardImg} contentFit="cover" />
+          {generatedImage ? (
+            <Image source={{ uri: generatedImage }} style={styles.cardImg} contentFit="cover" />
           ) : (
             <View style={[styles.cardImgPlaceholder, { backgroundColor: C.surface2 }]}>
               {isGenerating ? (
@@ -932,7 +934,7 @@ function ResultCard({ rec, index, colors: C, showDifficulty, isGenerating }: { r
               )}
             </View>
           )}
-          {rec.generatedImage && (
+          {generatedImage && (
             <View style={styles.aiTag}>
               <Ionicons name="sparkles" size={9} color={C.gold} />
               <Text style={[styles.aiTagText, { color: C.gold }]}>AI</Text>
@@ -960,7 +962,7 @@ function ResultCard({ rec, index, colors: C, showDifficulty, isGenerating }: { r
           <Text style={[styles.whyText, { color: C.textSecondary }]}>{rec.whyItFits}</Text>
         </View>
       )}
-      {rec.generatedImage && (
+      {generatedImage && (
         <View style={[styles.qualityBadge, { borderTopColor: C.border }]}>
           <Ionicons name="shield-checkmark-outline" size={11} color={C.gold} />
           <Text style={[styles.qualityBadgeText, { color: C.textSecondary }]}>Designed to keep your face unchanged</Text>
