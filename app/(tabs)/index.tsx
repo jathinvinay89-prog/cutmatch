@@ -125,6 +125,8 @@ export default function CutMatchScreen() {
   const [generatedImages, setGeneratedImages] = useState<Record<number, string>>({});
   const [analysisPhase, setAnalysisPhase] = useState<"idle" | "analyzing" | "images">("idle");
   const [pendingAnalysis, setPendingAnalysis] = useState<AnalysisState | null>(null);
+  const [analysisReady, setAnalysisReady] = useState(false);
+  const [imageCount, setImageCount] = useState(0);
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -179,6 +181,22 @@ export default function CutMatchScreen() {
     return () => stopGlowPulse();
   }, [selectedImage, phase]);
 
+  React.useEffect(() => {
+    if (pendingAnalysis && imageCount >= 4 && generatingImageRanks.size === 0 && !analysisReady) {
+      triggerHaptic("success");
+      setStatusText("Your CutMatch is ready!");
+      setAnalysisReady(true);
+      setPendingAnalysis(null);
+      setPhase("results");
+      Animated.spring(resultsAnim, {
+        toValue: 0,
+        tension: 60,
+        friction: 14,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [pendingAnalysis, imageCount, generatingImageRanks, analysisReady]);
+
   const animateDots = useCallback(() => {
     loadingDotAnim.forEach((dot, i) => {
       Animated.loop(
@@ -192,8 +210,8 @@ export default function CutMatchScreen() {
   }, []);
 
   const showResults = () => {
-    if (generatingImageRanks.size > 0) return;
     setAnalysisPhase("images");
+    setAnalysisReady(true);
     setPhase("results");
     Animated.spring(resultsAnim, {
       toValue: 0,
@@ -300,6 +318,8 @@ export default function CutMatchScreen() {
     setGeneratingImageRanks(ranks);
     setAnalysisPhase("images");
     setPendingAnalysis(analysisData);
+    setAnalysisReady(false);
+    setImageCount(0);
 
     // Start injecting Puter script immediately in background (web only)
     if (Platform.OS === "web") injectPuterScript();
@@ -314,6 +334,7 @@ export default function CutMatchScreen() {
           const polUri = await fetchPollinationsImage(prompt);
           if (polUri) {
             setRankImage(rec.rank, polUri);
+            setImageCount((n) => n + 1);
             return;
           }
 
@@ -333,6 +354,7 @@ export default function CutMatchScreen() {
                   } catch { /* keep rawSrc */ }
                 }
                 setRankImage(rec.rank, finalUri);
+                setImageCount((n) => n + 1);
                 return;
               }
             }
@@ -356,6 +378,7 @@ export default function CutMatchScreen() {
     setGeneratingImageRanks(new Set());
     setAnalysisPhase("analyzing");
     setPendingAnalysis(null);
+    setAnalysisReady(false);
     animateDots();
 
     let base64Data: string;
