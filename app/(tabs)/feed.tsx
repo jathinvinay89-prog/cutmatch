@@ -63,7 +63,8 @@ function ImageWithFallback({ uri, style, contentFit = "cover", fallbackSize = 16
 }) {
   const [errored, setErrored] = useState(false);
   useEffect(() => { setErrored(false); }, [uri]);
-  if (!uri || errored) {
+  const safeUri = uri && uri.startsWith("http") ? uri.replace(/\/uploads\//, "/api/uploads/") : uri;
+  if (!safeUri || errored) {
     return (
       <View style={[style, { alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor }]}>
         <Ionicons name="image-outline" size={fallbackSize} color={borderColor} />
@@ -72,7 +73,7 @@ function ImageWithFallback({ uri, style, contentFit = "cover", fallbackSize = 16
   }
   return (
     <Image
-      source={{ uri }}
+      source={{ uri: safeUri }}
       style={style}
       contentFit={contentFit}
       cachePolicy="memory-disk"
