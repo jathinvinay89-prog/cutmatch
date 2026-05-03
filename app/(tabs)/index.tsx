@@ -285,31 +285,34 @@ export default function CutMatchScreen() {
   // On native: returns the URL string directly — expo-image loads it natively.
   // On web: fetches and returns a blob URL to avoid CORS issues.
   // Returns null on 429/503/network error so caller can fall back to Puter.
-  const fetchPollinationsImage = useCallback(async (prompt: string): Promise<string | null> => {
+  const fetchPollinationsImage = useCallback(async (prompt: string, timeoutMs = 7000): Promise<string | null> => {
     const seed = Math.floor(Math.random() * 999999);
     const encoded = encodeURIComponent(prompt.slice(0, 800));
     const url = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&seed=${seed}&nologo=true&model=flux`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     if (Platform.OS !== "web") {
-      // Native: expo-image handles HTTP URLs directly — just verify status first
       try {
-        const resp = await globalThis.fetch(url);
+        const resp = await globalThis.fetch(url, { signal: controller.signal as any });
         if (!resp.ok) return null; // 429, 503 → caller falls back
-        // Don't read body here; expo-image will load from the URL
         return url;
       } catch {
         return null;
+      } finally {
+        clearTimeout(timer);
       }
     }
 
-    // Web: fetch blob → create object URL so expo-image renders without CORS issues
     try {
-      const resp = await globalThis.fetch(url);
+      const resp = await globalThis.fetch(url, { signal: controller.signal as any });
       if (!resp.ok) return null;
       const blob = await resp.blob();
       return URL.createObjectURL(blob);
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }, []);
 
@@ -331,7 +334,7 @@ export default function CutMatchScreen() {
         const prompt = buildPortraitPrompt(analysisData, rec);
         try {
           // --- Primary: Pollinations ---
-          const polUri = await fetchPollinationsImage(prompt);
+          const polUri = await fetchPollinationsImage(prompt, 7000);
           if (polUri) {
             setRankImage(rec.rank, polUri);
             setImageCount((n) => n + 1);
