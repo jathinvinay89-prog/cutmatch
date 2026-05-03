@@ -13,6 +13,7 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   Linking,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
@@ -76,6 +77,33 @@ function useSpringPress() {
   return { scale, onPressIn, onPressOut };
 }
 
+function injectPuterScript() {
+  if (typeof document === "undefined") return;
+  if ((window as any).puter) return;
+  if (document.querySelector('script[src="https://js.puter.com/v2/"]')) return;
+  const script = document.createElement("script");
+  script.src = "https://js.puter.com/v2/";
+  script.async = true;
+  document.head.appendChild(script);
+}
+
+function waitForPuter(timeoutMs = 15_000): Promise<any> {
+  return new Promise((resolve) => {
+    const puterAI = () => (window as any).puter?.ai;
+    if (puterAI()?.txt2img) { resolve(puterAI()); return; }
+    const start = Date.now();
+    const interval = setInterval(() => {
+      if (puterAI()?.txt2img) {
+        clearInterval(interval);
+        resolve(puterAI());
+      } else if (Date.now() - start >= timeoutMs) {
+        clearInterval(interval);
+        resolve(null);
+      }
+    }, 200);
+  });
+}
+
 export default function CutMatchScreen() {
   const insets = useSafeAreaInsets();
   const { currentUser, apiBase, settings, colors } = useApp();
@@ -93,6 +121,7 @@ export default function CutMatchScreen() {
   const [isSharing, setIsSharing] = useState(false);
   const [isSendingToFriend, setIsSendingToFriend] = useState(false);
   const [hasSentToFriend, setHasSentToFriend] = useState(false);
+  const [generatingImageRanks, setGeneratingImageRanks] = useState<Set<number>>(new Set());
   const resultsAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const loadingDotAnim = [
     useRef(new Animated.Value(0.3)).current,
@@ -109,6 +138,11 @@ export default function CutMatchScreen() {
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+
+  // Inject Puter.js script on web as early as possible
+  React.useEffect(() => {
+    if (Platform.OS === "web") injectPuterScript();
+  }, []);
 
   const triggerHaptic = (type: "light" | "medium" | "success" | "error") => {
     if (!settings.enableHaptics) return;
@@ -214,11 +248,20 @@ export default function CutMatchScreen() {
 
   const generateImagesWithPuter = async (analysisData: AnalysisState) => {
     if (Platform.OS !== "web") return;
-    const puterAI = (window as any).puter?.ai;
+
+    // Mark all ranks as generating
+    const ranks = new Set(analysisData.recommendations.map((r) => r.rank));
+    setGeneratingImageRanks(ranks);
+
+    // Ensure the script is injected, then wait up to 15s for puter.ai to be ready
+    injectPuterScript();
+    const puterAI = await waitForPuter(15_000);
     if (!puterAI?.txt2img) {
-      console.warn("Puter.js not loaded or puter.ai.txt2img unavailable");
+      console.warn("Puter.js did not become available — skipping image generation");
+      setGeneratingImageRanks(new Set());
       return;
     }
+
     await Promise.all(
       analysisData.recommendations.map(async (rec, i) => {
         if (i > 0) await new Promise((r) => setTimeout(r, i * 250));
@@ -238,8 +281,14 @@ export default function CutMatchScreen() {
               } : prev
             );
           }
-        } catch {
-          // Silent — card shows scissors placeholder
+        } catch (err) {
+          console.warn(`Puter image gen failed for rank ${rec.rank}:`, err);
+        } finally {
+          setGeneratingImageRanks((prev) => {
+            const next = new Set(prev);
+            next.delete(rec.rank);
+            return next;
+          });
         }
       })
     );
@@ -669,7 +718,7 @@ export default function CutMatchScreen() {
           )}
 
           {(analysis?.recommendations ?? [{}, {}, {}, {}]).map((rec: any, i: number) => (
-            <ResultCard key={i} rec={rec} index={i} colors={C} showDifficulty={settings.showDifficulty} />
+            <ResultCard key={i} rec={rec} index={i} colors={C} showDifficulty={settings.showDifficulty} isGenerating={generatingImageRanks.has(rec.rank)} />
           ))}
         </Animated.ScrollView>
 
@@ -768,7 +817,7 @@ export default function CutMatchScreen() {
   );
 }
 
-function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index: number; colors: any; showDifficulty: boolean }) {
+function ResultCard({ rec, index, colors: C, showDifficulty, isGenerating }: { rec: any; index: number; colors: any; showDifficulty: boolean; isGenerating?: boolean }) {
   const slideAnim = useRef(new Animated.Value(50)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const isDark = C.background === "#0A0A0A";
@@ -817,7 +866,11 @@ function ResultCard({ rec, index, colors: C, showDifficulty }: { rec: any; index
             <Image source={{ uri: rec.generatedImage }} style={styles.cardImg} contentFit="cover" />
           ) : (
             <View style={[styles.cardImgPlaceholder, { backgroundColor: C.surface2 }]}>
-              <Ionicons name="cut-outline" size={24} color={C.border} />
+              {isGenerating ? (
+                <ActivityIndicator size="small" color={C.gold} />
+              ) : (
+                <Ionicons name="cut-outline" size={24} color={C.border} />
+              )}
             </View>
           )}
           {rec.generatedImage && (
