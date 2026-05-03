@@ -307,80 +307,91 @@ function saveImageBuffer(buf: Buffer, ext = "jpg"): string {
   return `/uploads/${filename}`;
 }
 
-// ── POLLINATIONS.AI IMAGE GENERATION ─────────────────────────────────────────
-// Free, no API key required. Uses the FLUX model by default.
-// Docs: https://github.com/pollinations/pollinations/blob/master/APIDOCS.md
-const POLLINATIONS_MODEL = "flux";
-const POLLINATIONS_WIDTH = 768;
-const POLLINATIONS_HEIGHT = 768;
+// ── PUTER.AI IMAGE GENERATION ─────────────────────────────────────────────────
+// Uses puter.com's AI image generation API (free Puter account required).
+// Driver: openai-image-generation, Model: dall-e-2 (lowest cost, still good quality)
+// API docs: https://docs.puter.com
+const PUTER_API_ORIGIN = "https://api.puter.com";
 
-function buildPollinationsUrl(prompt: string, seed: number): string {
-  const params = new URLSearchParams({
-    model: POLLINATIONS_MODEL,
-    width: String(POLLINATIONS_WIDTH),
-    height: String(POLLINATIONS_HEIGHT),
-    seed: String(seed),
-    nologo: "true",
-    enhance: "false",
-    safe: "false",
-    referrer: "cutmatch",
-  });
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?${params.toString()}`;
-}
-
-async function fetchPollinationsImage(prompt: string, seed: number): Promise<Buffer | null> {
-  const url = buildPollinationsUrl(prompt, seed);
-  const token = process.env.GROQ_API_KEY;
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
-    try {
-      const headers: Record<string, string> = { Accept: "image/jpeg,image/png,image/*" };
-      if (token) headers.Authorization = `Bearer ${token}`;
-
-      const res = await fetch(url, {
-        method: "GET",
-        headers,
-        signal: controller.signal,
-      });
-
-      if (res.status === 429) {
-        console.warn(`Pollinations attempt ${attempt}: rate limited, backing off`);
-        await new Promise((r) => setTimeout(r, attempt * 1000));
-        continue;
-      }
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.warn(`Pollinations attempt ${attempt}: HTTP ${res.status} — ${text.slice(0, 150)}`);
-        await new Promise((r) => setTimeout(r, 800));
-        continue;
-      }
-
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.startsWith("image/")) {
-        const text = await res.text().catch(() => "");
-        console.warn(`Pollinations attempt ${attempt}: non-image content-type "${ct}" — ${text.slice(0, 150)}`);
-        await new Promise((r) => setTimeout(r, 1500));
-        continue;
-      }
-
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length < 1000) {
-        console.warn(`Pollinations attempt ${attempt}: buffer too small (${buf.length} bytes)`);
-        continue;
-      }
-      return buf;
-    } catch (err: any) {
-      const reason = err.name === "AbortError" ? "timed out" : err.message;
-      console.warn(`Pollinations attempt ${attempt} error: ${reason}`);
-      await new Promise((r) => setTimeout(r, 1500));
-    } finally {
-      clearTimeout(timer);
-    }
+async function fetchPuterImage(prompt: string): Promise<Buffer | null> {
+  const token = process.env.PUTER_API_KEY;
+  if (!token) {
+    console.error("PUTER_API_KEY not set — image generation disabled");
+    return null;
   }
-  return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HAIR_TRYON_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${PUTER_API_ORIGIN}/drivers/call`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        interface: "puter-image-generation",
+        driver: "openai-image-generation",
+        test_mode: false,
+        method: "generate",
+        args: { prompt, model: "dall-e-2", size: "512x512" },
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.warn(`Puter image generation failed: HTTP ${res.status} — ${text.slice(0, 200)}`);
+      return null;
+    }
+
+    const ct = res.headers.get("content-type") || "";
+
+    // Direct binary image response
+    if (ct.startsWith("image/")) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      return buf.length >= 1000 ? buf : null;
+    }
+
+    // JSON response — parse and handle URL or base64
+    const json: any = await res.json().catch(() => null);
+
+    const imageUrl: string | null =
+      typeof json?.result === "string" ? json.result :
+      typeof json?.result?.url === "string" ? json.result.url :
+      typeof json?.url === "string" ? json.url :
+      null;
+
+    if (imageUrl) {
+      const imgRes = await fetch(imageUrl);
+      if (imgRes.ok) {
+        const buf = Buffer.from(await imgRes.arrayBuffer());
+        return buf.length >= 1000 ? buf : null;
+      }
+    }
+
+    const b64: string | null =
+      typeof json?.result?.b64_json === "string" ? json.result.b64_json :
+      typeof json?.b64_json === "string" ? json.b64_json :
+      null;
+
+    if (b64) {
+      const buf = Buffer.from(b64, "base64");
+      return buf.length >= 1000 ? buf : null;
+    }
+
+    console.warn(`Puter image generation: unexpected response — ${JSON.stringify(json).slice(0, 200)}`);
+    return null;
+  } catch (err: any) {
+    const reason = err.name === "AbortError" ? "timed out" : err.message;
+    console.warn(`Puter image generation error: ${reason}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, rec: HaircutRec): Promise<string | null> {
@@ -395,16 +406,15 @@ async function generateHairTryOnUrl(imageInput: string, analysis: FaceAnalysis, 
     }
 
     const prompt = buildPortraitPrompt(analysis, rec);
-    const seed = parseInt(crypto.createHash("md5").update(raw + rec.name).digest("hex").slice(0, 8), 16) % 2147483647;
 
-    const buf = await fetchPollinationsImage(prompt, seed);
+    const buf = await fetchPuterImage(prompt);
     if (!buf) {
-      console.warn(`Rank ${rec.rank}: Pollinations image generation failed for "${rec.name}"`);
+      console.warn(`Rank ${rec.rank}: Puter image generation failed for "${rec.name}"`);
       return null;
     }
 
     const localUrl = saveImageBuffer(buf, "jpg");
-    console.log(`Rank ${rec.rank}: saved Pollinations portrait to ${localUrl}`);
+    console.log(`Rank ${rec.rank}: saved Puter portrait to ${localUrl}`);
     setHairTryOnCache(cacheKey, localUrl);
     return localUrl;
   } catch (err: any) {
