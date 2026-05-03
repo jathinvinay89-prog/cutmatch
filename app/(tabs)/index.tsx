@@ -344,6 +344,19 @@ export default function CutMatchScreen() {
     });
   }, [fetchPollinationsImage, setRankImage, clearRankGenerating]);
 
+  const syncAnalysisImages = useCallback(() => {
+    setAnalysis((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        recommendations: prev.recommendations.map((rec) => ({
+          ...rec,
+          generatedImage: generatedImages[rec.rank] ?? rec.generatedImage ?? null,
+        })),
+      };
+    });
+  }, [generatedImages]);
+
   const runAnalysis = async () => {
     if (!selectedImage) return;
     triggerHaptic("medium");
@@ -431,6 +444,7 @@ export default function CutMatchScreen() {
                   useNativeDriver: true,
                 }).start();
                 generateImages({ ...currentAnalysis });
+                syncAnalysisImages();
               }
             } else if (event.type === "error") {
               throw new Error(event.message);
@@ -453,6 +467,7 @@ export default function CutMatchScreen() {
           useNativeDriver: true,
         }).start();
         generateImages({ ...currentAnalysis });
+        syncAnalysisImages();
       }
     } catch (err: any) {
       triggerHaptic("error");
